@@ -79,12 +79,29 @@ python3 -m spic.cli setup-shortcuts
 
 ---
 
-## ⌨️ Hotkeys & Modes
+## ⌨️ Hotkeys & Custom Shortcut Management
 
-| Hotkey | Mode | Latency | Description |
+Spic includes an **intelligent hotkey manager** that scans active GNOME keybindings on your machine to guide you to 100% free shortcuts and prevent accidental desktop conflicts:
+
+| Default Hotkey | Mode | Latency | Description |
 |---|---|---|---|
 | **`Ctrl + Alt + Space`** | **Fast Dictation** | `<300ms` | Instant voice typing with verbal punctuation (*"period"*, *"comma"*, *"new line"*) and instant deletions (*"scratch that"*). |
 | **`Ctrl + Super + Space`** | **Smart Copilot** | `~2-3s` | Deep LLM interpretation using local `llama3.2:3b` or Cloud APIs. Formats bullet points, cleans grammar, and resolves complex self-corrections. |
+
+### Customize Your Shortcuts:
+```bash
+# 1. Interactive configuration wizard with conflict detection
+python3 -m spic.cli shortcuts
+
+# 2. View all free & available hotkeys on your desktop
+python3 -m spic.cli shortcuts --list-free
+
+# 3. Check if a specific shortcut has system conflicts
+python3 -m spic.cli shortcuts --check "ctrl+alt+m"
+
+# 4. Directly assign custom shortcuts
+python3 -m spic.cli shortcuts --fast "ctrl+alt+m" --smart "ctrl+super+k"
+```
 
 ---
 

@@ -181,10 +181,149 @@ def cmd_test_injection(args) -> None:
 
 
 def cmd_setup_shortcuts(args) -> None:
-    """Register GNOME desktop shortcuts."""
+    """Configure and register GNOME global shortcuts with conflict detection."""
+    from spic.shortcuts import (
+        check_shortcut_conflict,
+        format_binding_label,
+        get_free_recommended_shortcuts,
+        normalize_binding,
+        register_gnome_shortcuts,
+    )
+
+    config = load_config()
     python_bin = sys.executable
     spic_entry = str(Path(__file__).resolve())
-    register_gnome_shortcuts(python_bin, spic_entry)
+
+    # 1. Flag: List Free Hotkeys
+    if getattr(args, "list_free", False):
+        print("\n============================================================")
+        print(" 🔍 Free & Available Hotkeys on Your Desktop")
+        print("============================================================")
+        free_keys = get_free_recommended_shortcuts()
+        if not free_keys:
+            print("  No default candidate hotkeys are currently free.")
+        else:
+            for b, label, desc in free_keys:
+                print(f"  ✅ {label:24} ({b})\n     └─ {desc}")
+        print("============================================================\n")
+        return
+
+    # 2. Flag: Check specific shortcut conflict
+    if getattr(args, "check", None):
+        target = args.check
+        norm = normalize_binding(target)
+        label = format_binding_label(norm)
+        conflict = check_shortcut_conflict(norm)
+        print(f"\nChecking shortcut: '{target}' -> {norm} ({label})")
+        if conflict:
+            print(f"❌ CONFLICT: Currently assigned to:")
+            print(f"   Action: {conflict['action_name']}")
+            print(f"   Schema: {conflict['schema']}:{conflict['key']}")
+        else:
+            print(f"✅ AVAILABLE: '{label}' is completely unassigned and safe to use!\n")
+        return
+
+    # 3. Direct Flag Override (--fast / --smart)
+    if getattr(args, "fast", None) or getattr(args, "smart", None):
+        fast_b = normalize_binding(args.fast) if args.fast else config.shortcuts.fast_dictation
+        smart_b = normalize_binding(args.smart) if args.smart else config.shortcuts.smart_copilot
+
+        # Check conflicts
+        if args.fast:
+            conflict = check_shortcut_conflict(fast_b)
+            if conflict and not getattr(args, "force", False):
+                print(f"\n⚠️  WARNING: Fast shortcut '{fast_b}' conflicts with:")
+                print(f"   Action: {conflict['action_name']} ({conflict['schema']})")
+                print("   Use --force to override this shortcut.")
+                return
+
+        if args.smart:
+            conflict = check_shortcut_conflict(smart_b)
+            if conflict and not getattr(args, "force", False):
+                print(f"\n⚠️  WARNING: Smart shortcut '{smart_b}' conflicts with:")
+                print(f"   Action: {conflict['action_name']} ({conflict['schema']})")
+                print("   Use --force to override this shortcut.")
+                return
+
+        config.shortcuts.fast_dictation = fast_b
+        config.shortcuts.smart_copilot = smart_b
+        save_config(config)
+        register_gnome_shortcuts(python_bin, spic_entry, fast_b, smart_b)
+        print(f"✅ Configured Shortcuts:\n  - Fast:  {format_binding_label(fast_b)} ({fast_b})\n  - Smart: {format_binding_label(smart_b)} ({smart_b})")
+        return
+
+    # 4. Interactive Wizard
+    print("\n============================================================")
+    print(" ⌨️  Spic Custom Hotkey Configuration Wizard")
+    print("============================================================")
+    curr_fast = config.shortcuts.fast_dictation
+    curr_smart = config.shortcuts.smart_copilot
+    print(f"Current Bindings:")
+    print(f"  1. Fast Dictation (<300ms):  {format_binding_label(curr_fast)} ({curr_fast})")
+    print(f"  2. Smart Copilot (LLM):      {format_binding_label(curr_smart)} ({curr_smart})\n")
+
+    print("Recommended Free Hotkeys on your desktop:")
+    free_candidates = get_free_recommended_shortcuts()
+    for i, (b, label, desc) in enumerate(free_candidates[:5], start=1):
+        print(f"  [{i}] {label:22} ({desc})")
+
+    print("\nPress ENTER to keep existing bindings, or configure new ones.")
+
+    # Prompt Fast Hotkey
+    print("-" * 60)
+    user_fast = input(f"Enter Fast Dictation shortcut [Default: {curr_fast}]: ").strip()
+    selected_fast = curr_fast
+    if user_fast:
+        norm_fast = normalize_binding(user_fast)
+        conflict = check_shortcut_conflict(norm_fast)
+        if conflict:
+            print(f"\n⚠️  WARNING: '{user_fast}' is currently in use by:")
+            print(f"   Action: {conflict['action_name']}")
+            print(f"   Schema: {conflict['schema']}:{conflict['key']}")
+            confirm = input("   Do you want to override this system action? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                print("   Keeping existing binding.")
+            else:
+                selected_fast = norm_fast
+        else:
+            print(f"   ✅ '{format_binding_label(norm_fast)}' is free and available!")
+            selected_fast = norm_fast
+
+    # Prompt Smart Hotkey
+    print("-" * 60)
+    user_smart = input(f"Enter Smart Copilot shortcut [Default: {curr_smart}]: ").strip()
+    selected_smart = curr_smart
+    if user_smart:
+        norm_smart = normalize_binding(user_smart)
+        conflict = check_shortcut_conflict(norm_smart)
+        if conflict:
+            print(f"\n⚠️  WARNING: '{user_smart}' is currently in use by:")
+            print(f"   Action: {conflict['action_name']}")
+            print(f"   Schema: {conflict['schema']}:{conflict['key']}")
+            confirm = input("   Do you want to override this system action? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                print("   Keeping existing binding.")
+            else:
+                selected_smart = norm_smart
+        else:
+            print(f"   ✅ '{format_binding_label(norm_smart)}' is free and available!")
+            selected_smart = norm_smart
+
+    # Save & Register
+    config.shortcuts.fast_dictation = selected_fast
+    config.shortcuts.smart_copilot = selected_smart
+    save_config(config)
+
+    print("\nRegistering shortcuts in GNOME desktop...")
+    ok = register_gnome_shortcuts(python_bin, spic_entry, selected_fast, selected_smart)
+    if ok:
+        print("============================================================")
+        print(" 🎉 Shortcuts Successfully Configured!")
+        print(f"  • Fast Dictation: {format_binding_label(selected_fast)} ({selected_fast})")
+        print(f"  • Smart Copilot:  {format_binding_label(selected_smart)} ({selected_smart})")
+        print("============================================================\n")
+    else:
+        print("❌ Failed to register shortcuts in GNOME settings.\n")
 
 
 def cmd_config(args) -> None:
@@ -229,9 +368,15 @@ def main() -> None:
     p_inj.add_argument("--text", type=str, default=None, help="Text to inject")
     p_inj.set_defaults(func=cmd_test_injection)
 
-    # setup-shortcuts
-    p_sc = subparsers.add_parser("setup-shortcuts", help="Register GNOME system shortcuts")
-    p_sc.set_defaults(func=cmd_setup_shortcuts)
+    # setup-shortcuts (alias: shortcuts)
+    for cmd_name in ("setup-shortcuts", "shortcuts"):
+        p_sc = subparsers.add_parser(cmd_name, help="Configure & guide GNOME global hotkeys")
+        p_sc.add_argument("--fast", type=str, default=None, help="Custom shortcut for Fast Dictation (e.g. 'ctrl+alt+m')")
+        p_sc.add_argument("--smart", type=str, default=None, help="Custom shortcut for Smart Copilot (e.g. 'ctrl+super+k')")
+        p_sc.add_argument("--list-free", action="store_true", help="List free & available hotkeys on your desktop")
+        p_sc.add_argument("--check", type=str, default=None, help="Check if a specific shortcut has conflicts")
+        p_sc.add_argument("--force", action="store_true", help="Override conflicting system shortcuts without confirmation")
+        p_sc.set_defaults(func=cmd_setup_shortcuts)
 
     # config
     p_cfg = subparsers.add_parser("config", help="Display configuration")

@@ -82,8 +82,19 @@ class InjectionConfig(BaseModel):
 class UIConfig(BaseModel):
     show_hud: bool = Field(default=True, description="Show floating red/translucent HUD during listening/processing")
     hud_theme: Literal["red_waveform", "minimal_pill"] = Field(default="red_waveform", description="HUD style theme")
-    hud_width: int = Field(default=220, description="Width of floating HUD window in pixels")
-    hud_height: int = Field(default=64, description="Height of floating HUD window in pixels")
+    hud_width: int = Field(default=170, description="Width of floating HUD window in pixels")
+    hud_height: int = Field(default=42, description="Height of floating HUD window in pixels")
+
+
+class ShortcutsConfig(BaseModel):
+    fast_dictation: str = Field(
+        default="<Control><Alt>space",
+        description="Global hotkey for Fast Voice Dictation (e.g. <Control><Alt>space, <Control><Alt>m)"
+    )
+    smart_copilot: str = Field(
+        default="<Control><Super>space",
+        description="Global hotkey for Smart Voice Copilot (e.g. <Control><Super>space, <Control><Shift>space)"
+    )
 
 
 class SpicConfig(BaseModel):
@@ -92,6 +103,7 @@ class SpicConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    shortcuts: ShortcutsConfig = Field(default_factory=ShortcutsConfig)
 
 
 def load_config() -> SpicConfig:
