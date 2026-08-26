@@ -282,32 +282,53 @@ class FloatingHUD:
             return 1.0
 
         # =========================================================================
-        # STATE 1: LISTENING WAVE (Crimson & Coral Audio Reactive Splines)
+        # STATE 1: LISTENING (Histogram Audio-Reactive Spectrum Bars)
         # =========================================================================
         if state == "listening":
-            max_amp = (h * 0.36) * max(0.20, level) * min(1.0, progress * 1.2)
+            num_bars = 28
+            bar_width = 3.0
+            bar_pad_x = offset_x + 14.0
+            bar_area_w = max(10.0, w - 28.0)
+            bar_spacing = bar_area_w / float(num_bars)
+            max_bar_h = (h * 0.72) * min(1.0, progress * 1.2)
+            min_bar_h = 4.0
 
-            pts1, pts2, pts3 = [], [], []
-            for px in range(0, int(wave_w) + 1, int(step)):
-                x = pad_x + px
-                nx = px / wave_w
-                env = _edge_envelope(nx)
+            for i in range(num_bars):
+                nx = i / float(num_bars - 1)
+                bx = bar_pad_x + (i + 0.5) * bar_spacing
 
-                y1 = cy + math.sin(nx * 10.0 - phase * 3.2) * (max_amp * env)
-                pts1.extend([x, y1])
+                # Distance from center (0 at middle, 1 at edges)
+                center_dist = abs(nx - 0.5) * 2.0
+                center_weight = math.cos(center_dist * (math.pi / 2.0) * 0.75)
 
-                y2 = cy + math.sin(nx * 14.0 + phase * 2.4) * math.cos(nx * 5.0 - phase * 1.6) * (max_amp * 0.78 * env)
-                pts2.extend([x, y2])
+                # Harmonic oscillation & live audio RMS modulation
+                osc1 = math.sin(i * 0.85 - phase * 3.8)
+                osc2 = math.cos(i * 1.35 + phase * 2.6)
+                osc3 = math.sin(nx * 18.0 - phase * 5.0)
+                harmonic = 0.45 + 0.32 * osc1 + 0.15 * osc2 + 0.08 * osc3
 
-                y3 = cy + math.sin(nx * 18.0 - phase * 4.0) * (max_amp * 0.48 * env)
-                pts3.extend([x, y3])
+                dyn_h = min_bar_h + (max_bar_h - min_bar_h) * (level * 0.88 + 0.12) * center_weight * harmonic
+                dyn_h = max(min_bar_h, min(max_bar_h, dyn_h))
 
-            if len(pts3) >= 4:
-                self._canvas.create_line(pts3, fill="#FFA07A", width=1.4, smooth=True)
-            if len(pts2) >= 4:
-                self._canvas.create_line(pts2, fill="#FF6B6B", width=1.8, smooth=True)
-            if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#FF3B30", width=2.8, smooth=True)
+                by1 = cy - (dyn_h / 2.0)
+                by2 = cy + (dyn_h / 2.0)
+
+                # Vibrant spectral gradient
+                if center_dist < 0.28:
+                    bar_color = "#FF3B30"  # Vivid Crimson
+                elif center_dist < 0.60:
+                    bar_color = "#FF6B6B"  # Coral Sunset
+                elif center_dist < 0.85:
+                    bar_color = "#FFA07A"  # Peach Amber
+                else:
+                    bar_color = "#FF8A80"  # Soft Rose
+
+                self._canvas.create_line(
+                    bx, by1, bx, by2,
+                    fill=bar_color,
+                    width=bar_width,
+                    capstyle="round",
+                )
 
         # =========================================================================
         # STATE 2: THINKING WAVE (Neon Cyan & Violet Flow Ribbon)
