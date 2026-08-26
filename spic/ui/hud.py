@@ -1,4 +1,4 @@
-"""High-fidelity floating HUD with 60 FPS fluid harmonic waves and spring transitions."""
+"""High-fidelity floating HUD with fluid morphing transitions and harmonic waves."""
 
 from __future__ import annotations
 
@@ -26,17 +26,18 @@ def _ease_in_cubic(t: float) -> float:
 
 
 class FloatingHUD:
-    """Ultra-smooth floating desktop HUD with 60 FPS fluid wave visualizer."""
+    """Ultra-smooth floating desktop HUD with 60 FPS morphing wave visualizer."""
 
     def __init__(self, config: UIConfig):
         self.config = config
         self._state: Literal["listening", "processing", "done"] = "listening"
         self._visibility: Literal["hidden", "entering", "visible", "exiting"] = "hidden"
         self._anim_progress = 0.0
+        self._morph_progress = 0.0  # 0.0 (Bars) -> 1.0 (Continuous String Wave)
         self._audio_level = 0.15
         self._target_audio_level = 0.15
         self._phase = 0.0
-        self._done_progress = 0.0
+        self._done_progress = 0.0  # 1.0 (Waving) -> 0.0 (Stopped flat string)
         self._root: Optional[tk.Tk] = None
         self._canvas: Optional[tk.Canvas] = None
         self._thread: Optional[threading.Thread] = None
@@ -67,9 +68,10 @@ class FloatingHUD:
                 pass
 
     def show_listening(self) -> None:
-        """Trigger entering animation into dynamic listening state."""
+        """Trigger entering animation into dynamic listening histogram bars."""
         with self._lock:
             self._state = "listening"
+            self._morph_progress = 0.0
             self._audio_level = 0.25
             self._target_audio_level = 0.25
             self._visibility = "entering"
@@ -78,23 +80,24 @@ class FloatingHUD:
         self._trigger_update()
 
     def show_processing(self) -> None:
-        """Switch to thinking state with fluid neon cyan/violet flow waves."""
+        """Settle histogram bars into a single string, then start wave ribbon."""
         with self._lock:
             self._state = "processing"
+            self._morph_progress = 0.0  # Initiates bar -> single string -> wave morph
             if self._visibility == "hidden":
                 self._visibility = "entering"
         self._trigger_update()
 
     def show_done(self, message: str = "✓ Injected") -> None:
-        """Switch to done state (settling emerald pulse) then animate exit."""
+        """Damp wave oscillations until string stops flat, then end and exit."""
         with self._lock:
             self._state = "done"
-            self._done_progress = 1.0
+            self._done_progress = 1.0  # Initiates wave -> flat resting string damping
         self._trigger_update()
 
-        # Hold done wave for 650ms then gracefully exit
+        # Wait for wave to settle and stop completely (~700ms) then gracefully exit
         def _delayed_exit():
-            time.sleep(0.65)
+            time.sleep(0.75)
             self.hide()
 
         threading.Thread(target=_delayed_exit, daemon=True).start()
@@ -155,11 +158,12 @@ class FloatingHUD:
             pass
 
     def _animate_loop(self) -> None:
-        """60 FPS transition and waveform tick."""
+        """60 FPS morphing, transition, and waveform tick."""
         if not self._running or not self._root:
             return
 
         with self._lock:
+            # 1. Visibility enter/exit
             if self._visibility == "entering":
                 self._anim_progress += 0.08
                 if self._anim_progress >= 1.0:
@@ -172,12 +176,19 @@ class FloatingHUD:
                     self._anim_progress = 0.0
                     self._visibility = "hidden"
 
+            # 2. Smooth Bar -> Single String -> Wave Morphing
+            if self._state == "processing":
+                if self._morph_progress < 1.0:
+                    self._morph_progress = min(1.0, self._morph_progress + 0.05)
+
+            # 3. Wave -> Flat String Settling Decay
+            if self._state == "done":
+                if self._done_progress > 0.0:
+                    self._done_progress = max(0.0, self._done_progress - 0.035)
+
             self._audio_level += (self._target_audio_level - self._audio_level) * 0.22
             self._target_audio_level *= 0.96
             self._phase += 0.12
-
-            if self._state == "done":
-                self._done_progress = max(0.0, self._done_progress - 0.035)
 
         self._render_frame()
 
@@ -185,7 +196,7 @@ class FloatingHUD:
             self._root.after(16, self._animate_loop)
 
     def _render_frame(self) -> None:
-        """Render seamless capsule with smooth Bezier harmonic waves."""
+        """Render seamless capsule with fluid morphing state animations."""
         if not self._root or not self._canvas:
             return
 
@@ -195,6 +206,7 @@ class FloatingHUD:
             state = self._state
             level = self._audio_level
             phase = self._phase
+            morph = self._morph_progress
             done_prog = self._done_progress
 
         if vis == "hidden":
@@ -225,7 +237,7 @@ class FloatingHUD:
         win_h = float(self._win_h)
         cy = win_h / 2.0
 
-        # Dynamic internal scaling (rendered on canvas, avoiding window resize lag)
+        # Dynamic internal scaling
         w = win_w * scale
         h = win_h
         offset_x = (win_w - w) / 2.0
@@ -265,13 +277,10 @@ class FloatingHUD:
             smooth=False,
         )
 
-        # 3. Waveform Margins (Spans Full Width from Start to End)
-        pad_x = offset_x + 6.0
-        wave_w = max(10.0, w - 12.0)
+        pad_x = offset_x + 8.0
+        wave_w = max(10.0, w - 16.0)
         if wave_w < 15.0:
             return
-
-        step = 2.0
 
         def _edge_envelope(nx: float) -> float:
             """Smooth edge softening only at extreme 6% edges for seamless cap anchoring."""
@@ -297,11 +306,9 @@ class FloatingHUD:
                 nx = i / float(num_bars - 1)
                 bx = bar_pad_x + (i + 0.5) * bar_spacing
 
-                # Distance from center (0 at middle, 1 at edges)
                 center_dist = abs(nx - 0.5) * 2.0
                 center_weight = math.cos(center_dist * (math.pi / 2.0) * 0.75)
 
-                # Harmonic oscillation & live audio RMS modulation
                 osc1 = math.sin(i * 0.85 - phase * 3.8)
                 osc2 = math.cos(i * 1.35 + phase * 2.6)
                 osc3 = math.sin(nx * 18.0 - phase * 5.0)
@@ -313,15 +320,14 @@ class FloatingHUD:
                 by1 = cy - (dyn_h / 2.0)
                 by2 = cy + (dyn_h / 2.0)
 
-                # Vibrant spectral gradient
                 if center_dist < 0.28:
-                    bar_color = "#FF3B30"  # Vivid Crimson
+                    bar_color = "#FF3B30"
                 elif center_dist < 0.60:
-                    bar_color = "#FF6B6B"  # Coral Sunset
+                    bar_color = "#FF6B6B"
                 elif center_dist < 0.85:
-                    bar_color = "#FFA07A"  # Peach Amber
+                    bar_color = "#FFA07A"
                 else:
-                    bar_color = "#FF8A80"  # Soft Rose
+                    bar_color = "#FF8A80"
 
                 self._canvas.create_line(
                     bx, by1, bx, by2,
@@ -331,54 +337,102 @@ class FloatingHUD:
                 )
 
         # =========================================================================
-        # STATE 2: THINKING WAVE (Neon Cyan & Violet Flow Ribbon)
+        # STATE 2: PROCESSING (Morph from Bars -> Single String -> Wave Ribbon)
         # =========================================================================
         elif state == "processing":
-            think_amp = (h * 0.28) * min(1.0, progress * 1.2)
+            step = 2.0
 
-            pts1, pts2, pts3 = [], [], []
-            for px in range(0, int(wave_w) + 1, int(step)):
-                x = pad_x + px
-                nx = px / wave_w
-                env = _edge_envelope(nx)
+            # Phase A: Histogram bars collapsing down to baseline (morph: 0.0 -> 0.4)
+            if morph < 0.4:
+                collapse_factor = max(0.0, 1.0 - (morph / 0.4))
+                num_bars = 28
+                bar_pad_x = offset_x + 14.0
+                bar_area_w = max(10.0, w - 28.0)
+                bar_spacing = bar_area_w / float(num_bars)
 
-                y1 = cy + math.sin(nx * 8.0 - phase * 3.6) * (think_amp * env)
-                pts1.extend([x, y1])
+                # Draw collapsing bars
+                for i in range(num_bars):
+                    nx = i / float(num_bars - 1)
+                    bx = bar_pad_x + (i + 0.5) * bar_spacing
+                    center_dist = abs(nx - 0.5) * 2.0
+                    center_weight = math.cos(center_dist * (math.pi / 2.0) * 0.75)
+                    bar_h = max(1.0, 12.0 * collapse_factor * center_weight)
+                    self._canvas.create_line(
+                        bx, cy - bar_h / 2.0, bx, cy + bar_h / 2.0,
+                        fill="#38BDF8",
+                        width=2.5 * collapse_factor,
+                        capstyle="round",
+                    )
 
-                y2 = cy + math.sin(nx * 12.0 + phase * 2.8) * math.cos(nx * 6.0 - phase * 1.8) * (think_amp * 0.85 * env)
-                pts2.extend([x, y2])
+                # Draw the forming center horizontal string
+                self._canvas.create_line(
+                    pad_x, cy, pad_x + wave_w, cy,
+                    fill="#00F2FE",
+                    width=2.2,
+                    smooth=True,
+                )
 
-                y3 = cy + math.cos(nx * 16.0 - phase * 4.4) * (think_amp * 0.52 * env)
-                pts3.extend([x, y3])
+            # Phase B: Single string waves and expands into traveling wave ribbon (morph: 0.4 -> 1.0)
+            else:
+                wave_growth = (morph - 0.4) / 0.6  # 0.0 -> 1.0
+                think_amp = (h * 0.28) * wave_growth * min(1.0, progress * 1.2)
 
-            if len(pts3) >= 4:
-                self._canvas.create_line(pts3, fill="#A855F7", width=1.4, smooth=True)
-            if len(pts2) >= 4:
-                self._canvas.create_line(pts2, fill="#38BDF8", width=2.0, smooth=True)
-            if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#00F2FE", width=2.8, smooth=True)
+                pts1, pts2, pts3 = [], [], []
+                for px in range(0, int(wave_w) + 1, int(step)):
+                    x = pad_x + px
+                    nx = px / wave_w
+                    env = _edge_envelope(nx)
+
+                    y1 = cy + math.sin(nx * 8.0 - phase * 3.6) * (think_amp * env)
+                    pts1.extend([x, y1])
+
+                    y2 = cy + math.sin(nx * 12.0 + phase * 2.8) * math.cos(nx * 6.0 - phase * 1.8) * (think_amp * 0.85 * env)
+                    pts2.extend([x, y2])
+
+                    y3 = cy + math.cos(nx * 16.0 - phase * 4.4) * (think_amp * 0.52 * env)
+                    pts3.extend([x, y3])
+
+                if len(pts3) >= 4:
+                    self._canvas.create_line(pts3, fill="#A855F7", width=1.4, smooth=True)
+                if len(pts2) >= 4:
+                    self._canvas.create_line(pts2, fill="#38BDF8", width=2.0, smooth=True)
+                if len(pts1) >= 4:
+                    self._canvas.create_line(pts1, fill="#00F2FE", width=2.8, smooth=True)
 
         # =========================================================================
-        # STATE 3: DONE WAVE (Emerald Settling Wave)
+        # STATE 3: DONE (Wave Oscillations Damp & Stop into Flat Resting String)
         # =========================================================================
         elif state == "done":
+            step = 2.0
+            # Wave amplitude damps down to 0 as done_prog decreases
             done_amp = (h * 0.24) * done_prog * min(1.0, progress)
 
-            pts1, pts2 = [], []
-            for px in range(0, int(wave_w) + 1, int(step)):
-                x = pad_x + px
-                nx = px / wave_w
-                env = _edge_envelope(nx)
+            # If wave is still damping (amplitude > 0.5px)
+            if done_prog > 0.08:
+                pts1, pts2 = [], []
+                for px in range(0, int(wave_w) + 1, int(step)):
+                    x = pad_x + px
+                    nx = px / wave_w
+                    env = _edge_envelope(nx)
 
-                y1 = cy + math.sin(nx * 9.0 - phase * 2.0) * (done_amp * env)
-                y2 = cy + math.cos(nx * 13.0 + phase * 1.6) * (done_amp * 0.62 * env)
-                pts1.extend([x, y1])
-                pts2.extend([x, y2])
+                    y1 = cy + math.sin(nx * 9.0 - phase * 2.0) * (done_amp * env)
+                    y2 = cy + math.cos(nx * 13.0 + phase * 1.6) * (done_amp * 0.62 * env)
+                    pts1.extend([x, y1])
+                    pts2.extend([x, y2])
 
-            if len(pts2) >= 4:
-                self._canvas.create_line(pts2, fill="#6EE7B7", width=1.6, smooth=True)
-            if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#10B981", width=2.6, smooth=True)
+                if len(pts2) >= 4:
+                    self._canvas.create_line(pts2, fill="#6EE7B7", width=1.6, smooth=True)
+                if len(pts1) >= 4:
+                    self._canvas.create_line(pts1, fill="#10B981", width=2.6, smooth=True)
+
+            # Once oscillations stop completely: Renders a calm, resting, horizontal straight string
+            else:
+                self._canvas.create_line(
+                    pad_x, cy, pad_x + wave_w, cy,
+                    fill="#10B981",
+                    width=2.4,
+                    smooth=True,
+                )
 
     def _get_capsule_polygon(self, x1: float, y1: float, x2: float, y2: float, segments: int = 24) -> list[float]:
         """Compute exact trigonometric circular arcs for a seamless capsule."""
