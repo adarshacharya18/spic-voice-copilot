@@ -82,8 +82,12 @@ class InjectionConfig(BaseModel):
 class UIConfig(BaseModel):
     show_hud: bool = Field(default=True, description="Show floating red/translucent HUD during listening/processing")
     hud_theme: Literal["red_waveform", "minimal_pill"] = Field(default="red_waveform", description="HUD style theme")
-    hud_width: int = Field(default=170, description="Width of floating HUD window in pixels")
-    hud_height: int = Field(default=42, description="Height of floating HUD window in pixels")
+    hud_position: Literal["top_center", "middle_center", "bottom_center"] = Field(
+        default="top_center",
+        description="Screen placement ('top_center' for top-middle, 'middle_center' for dead-center of screen)"
+    )
+    hud_width: int = Field(default=190, description="Width of floating HUD window in pixels")
+    hud_height: int = Field(default=46, description="Height of floating HUD window in pixels")
 
 
 class ShortcutsConfig(BaseModel):

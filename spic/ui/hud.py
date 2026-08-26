@@ -1,20 +1,32 @@
-"""High-fidelity floating HUD: Fully anchored string with seamless window integration."""
+"""Native Linux GTK3/Cairo True-Transparent HUD with 60 FPS morphing string physics."""
 
 from __future__ import annotations
 
 import math
+import os
+import sys
 import threading
 import time
 from typing import Literal, Optional
-import tkinter as tk
+
+# Ensure access to system python-gi on Ubuntu / Linux
+if "/usr/lib/python3/dist-packages" not in sys.path:
+    sys.path.append("/usr/lib/python3/dist-packages")
+
+# Force X11/XWayland backend for GTK so GNOME Mutter honors exact top-middle screen positioning
+os.environ.setdefault("GDK_BACKEND", "x11,wayland,*")
 
 from spic.config import UIConfig
 
-HUD_SURFACE_BG = "#0F1018"
-THEME_CYAN_CORE = "#00F2FE"       # Primary electric cyan
-THEME_CYAN_GLOW = "#38BDF8"       # Secondary ambient glow
-CAPSULE_BORDER_COLOR = "#22D3EE"    # Sharp glowing pill perimeter
-CAPSULE_GLOW_OUTLINE = "#0E3A4D"    # Outer soft ambient stroke
+HAS_GTK = False
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, Gdk, GLib
+    import cairo
+    HAS_GTK = True
+except Exception:
+    HAS_GTK = False
 
 
 def _ease_out_back(t: float) -> float:
@@ -30,7 +42,7 @@ def _ease_in_cubic(t: float) -> float:
 
 
 class FloatingHUD:
-    """Ultra-smooth floating HUD: Anchored Bars -> Settle to String -> String Waves -> Stops Flat."""
+    """Ultra-smooth floating HUD with 100% true-transparent alpha compositing."""
 
     def __init__(self, config: UIConfig):
         self.config = config
@@ -43,37 +55,34 @@ class FloatingHUD:
         self._target_audio_level = 0.15
         self._phase = 0.0
 
-        self._root: Optional[tk.Tk] = None
-        self._canvas: Optional[tk.Canvas] = None
+        self._win_w = max(180, self.config.hud_width or 190)
+        self._win_h = max(42, self.config.hud_height or 46)
+
+        self._gtk_window: Optional[Gtk.Window] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._lock = threading.Lock()
 
-        # Fixed viewport dimensions (prevents Wayland window resizing jitter)
-        self._win_w = max(180, self.config.hud_width or 190)
-        self._win_h = max(42, self.config.hud_height or 46)
-        self._pos_y = 30  # Top offset
-
     def start(self) -> None:
-        """Start the HUD window in a background GUI thread."""
+        """Start the HUD window in a background thread."""
         if not self.config.show_hud or self._thread is not None:
             return
 
         self._running = True
-        self._thread = threading.Thread(target=self._run_gui, daemon=True)
+        self._thread = threading.Thread(target=self._run_gtk_gui, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         """Close HUD window."""
         self._running = False
-        if self._root:
+        if HAS_GTK and self._gtk_window:
             try:
-                self._root.after(0, self._root.destroy)
+                GLib.idle_add(Gtk.main_quit)
             except Exception:
                 pass
 
     def show_listening(self) -> None:
-        """Trigger entering animation; shows dynamic audio-reactive vertical bars."""
+        """Show dynamic audio-reactive vertical bars."""
         with self._lock:
             self._state = "listening"
             self._morph_progress = 0.0
@@ -89,19 +98,18 @@ class FloatingHUD:
         """Settle bars into middle to form a single string, then that string waves."""
         with self._lock:
             self._state = "processing"
-            self._morph_progress = 0.0  # Initiates bar -> flat string -> wave morph
+            self._morph_progress = 0.0
             if self._visibility == "hidden":
                 self._visibility = "entering"
         self._trigger_update()
 
     def show_done(self, message: str = "✓ Injected") -> None:
-        """Damp wave oscillations until string stops completely flat, then exit."""
+        """Damp wave oscillations until string stops flat, then exit."""
         with self._lock:
             self._state = "done"
             self._done_decay = 1.0
         self._trigger_update()
 
-        # Hold for wave to settle and stop flat (~800ms) then gracefully exit
         def _delayed_exit():
             time.sleep(0.8)
             self.hide()
@@ -116,56 +124,87 @@ class FloatingHUD:
         self._trigger_update()
 
     def update_audio_level(self, level: float) -> None:
-        """Update live audio level (RMS) with smooth dynamic response."""
+        """Update live audio level (RMS)."""
         with self._lock:
             target = max(0.15, min(1.0, level * 10.0))
             self._target_audio_level = target
 
     def _trigger_update(self) -> None:
-        if self._root and self._running:
+        if HAS_GTK and self._gtk_window:
             try:
-                self._root.after(0, self._render_frame)
+                GLib.idle_add(self._gtk_window.queue_draw)
             except Exception:
                 pass
 
-    def _run_gui(self) -> None:
-        """Internal Tkinter GUI loop with stable 60 FPS rendering."""
+    def _get_target_coords(self) -> tuple[int, int]:
+        """Calculate exact top-middle screen coordinates."""
         try:
-            self._root = tk.Tk()
-            self._root.title("Spic Wave")
-            self._root.overrideredirect(True)
-            self._root.attributes("-topmost", True)
+            screen = Gdk.Screen.get_default()
+            if screen:
+                screen_w = screen.get_width()
+                screen_h = screen.get_height()
+            else:
+                screen_w, screen_h = 1920, 1080
 
-            screen_w = self._root.winfo_screenwidth()
-            pos_x = (screen_w - self._win_w) // 2
+            pos_x = max(0, (screen_w - self._win_w) // 2)
 
-            self._root.geometry(f"{self._win_w}x{self._win_h}+{pos_x}+{self._pos_y}")
-            self._root.configure(bg=HUD_SURFACE_BG)
+            pos_mode = getattr(self.config, "hud_position", "top_center")
+            if pos_mode == "middle_center":
+                pos_y = max(0, (screen_h - self._win_h) // 2)
+            elif pos_mode == "bottom_center":
+                pos_y = max(0, screen_h - self._win_h - 20)
+            else:
+                # Placed cleanly below Ubuntu top header bar and date/clock (~32px bar + ~22px breathing room)
+                pos_y = 54
 
-            try:
-                self._root.attributes("-alpha", 0.0)
-            except Exception:
-                pass
+            return (pos_x, pos_y)
+        except Exception:
+            return (0, 54)
 
-            self._canvas = tk.Canvas(
-                self._root,
-                width=self._win_w,
-                height=self._win_h,
-                bg=HUD_SURFACE_BG,
-                highlightthickness=0,
-            )
-            self._canvas.pack(fill="both", expand=True)
+    def _run_gtk_gui(self) -> None:
+        """Native GTK3 + Cairo GUI loop with 100% RGBA transparent compositing."""
+        if not HAS_GTK:
+            return
 
-            self._animate_loop()
-            self._root.withdraw()
-            self._root.mainloop()
+        # On Wayland compositors (GNOME Mutter), native Wayland strips custom coordinates.
+        # Using XWayland with POPUP override-redirect bypasses GNOME's center-new-windows setting.
+        try:
+            Gdk.set_allowed_backends("x11,wayland,*")
         except Exception:
             pass
 
-    def _animate_loop(self) -> None:
-        """60 FPS morphing physics loop."""
-        if not self._running or not self._root:
-            return
+        Gtk.init(None)
+
+        win = Gtk.Window(type=Gtk.WindowType.POPUP)
+        win.set_title("Spic Wave")
+        win.set_app_paintable(True)
+        win.set_keep_above(True)
+        win.set_decorated(False)
+        win.set_skip_taskbar_hint(True)
+        win.set_skip_pager_hint(True)
+
+        # Enable true 32-bit RGBA hardware visual for alpha transparency
+        screen = win.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            win.set_visual(visual)
+
+        win.set_default_size(self._win_w, self._win_h)
+        pos_x, pos_y = self._get_target_coords()
+        win.move(pos_x, pos_y)
+
+        win.connect("draw", self._on_cairo_draw)
+        self._gtk_window = win
+
+        # 60 FPS animation timer (16ms)
+        GLib.timeout_add(16, self._on_gtk_tick)
+
+        Gtk.main()
+
+    def _on_gtk_tick(self) -> bool:
+        """60 FPS physics and frame tick."""
+        if not self._running:
+            return False
 
         with self._lock:
             # 1. Entrance / Exit visibility
@@ -195,16 +234,19 @@ class FloatingHUD:
             self._target_audio_level *= 0.96
             self._phase += 0.12
 
-        self._render_frame()
+        if self._gtk_window:
+            if self._visibility == "hidden":
+                self._gtk_window.hide()
+            else:
+                pos_x, pos_y = self._get_target_coords()
+                self._gtk_window.move(pos_x, pos_y)
+                self._gtk_window.show_all()
+                self._gtk_window.queue_draw()
 
-        if self._root:
-            self._root.after(16, self._animate_loop)
+        return True
 
-    def _render_frame(self) -> None:
-        """Render the fully-anchored morphing visualizer on the rounded glass window."""
-        if not self._root or not self._canvas:
-            return
-
+    def _on_cairo_draw(self, widget: Gtk.Widget, cr: cairo.Context) -> bool:
+        """Vector render using Cairo with true alpha=0.0 transparent corners."""
         with self._lock:
             vis = self._visibility
             progress = self._anim_progress
@@ -215,69 +257,62 @@ class FloatingHUD:
             done_decay = self._done_decay
 
         if vis == "hidden":
-            self._root.withdraw()
-            return
-        else:
-            self._root.deiconify()
+            return False
+
+        w = float(widget.get_allocated_width())
+        h = float(widget.get_allocated_height())
+        cy = h / 2.0
+        r = (h / 2.0) - 2.0
 
         # Dynamic Alpha
         if vis == "entering":
-            curr_alpha = min(0.96, progress * 1.1)
-            scale = max(0.4, min(1.04, 0.4 + 0.64 * _ease_out_back(progress)))
+            alpha = min(0.96, progress * 1.1)
         elif vis == "exiting":
-            eased = _ease_in_cubic(progress)
-            curr_alpha = max(0.0, progress * 0.96)
-            scale = max(0.3, eased)
+            alpha = max(0.0, progress * 0.96)
         else:
-            curr_alpha = 0.96
-            scale = 1.0
-
-        try:
-            self._root.attributes("-alpha", curr_alpha)
-        except Exception:
-            pass
-
-        self._canvas.delete("all")
-        win_w = float(self._win_w)
-        win_h = float(self._win_h)
-        cy = win_h / 2.0
-
-        w = win_w * scale
-        h = win_h
-        offset_x = (win_w - w) / 2.0
-        offset_y = 0.0
+            alpha = 0.96
 
         # =========================================================================
-        # 1. Capsule Surface & Rounded Floating Window Geometry
+        # 1. Clear Entire Surface to 100% TRUE TRANSPARENT (Alpha = 0.0)
         # =========================================================================
-        outer_pts = self._get_capsule_polygon(offset_x + 1.0, offset_y + 1.0, offset_x + w - 1.0, offset_y + h - 1.0)
-        self._canvas.create_polygon(
-            outer_pts,
-            fill=HUD_SURFACE_BG,
-            outline=CAPSULE_GLOW_OUTLINE,
-            width=2.5,
-            smooth=False,
-        )
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
 
-        inner_pts = self._get_capsule_polygon(offset_x + 2.0, offset_y + 2.0, offset_x + w - 2.0, offset_y + h - 2.0)
-        self._canvas.create_polygon(
-            inner_pts,
-            fill=HUD_SURFACE_BG,
-            outline=CAPSULE_BORDER_COLOR,
-            width=1.6,
-            smooth=False,
-        )
+        # =========================================================================
+        # 2. Draw Rounded Glass Pill Capsule
+        # =========================================================================
+        x1, y1 = 2.0, 2.0
+        x2, y2 = w - 2.0, h - 2.0
 
-        # Exact physical frame anchors (seamless 0px gap to left & right border apexes)
-        x_left_anchor = offset_x + 2.0
-        x_right_anchor = offset_x + w - 2.0
-        total_string_span = max(10.0, x_right_anchor - x_left_anchor)
+        cr.new_path()
+        cr.arc(x1 + r, y1 + r, r, math.pi / 2.0, 3.0 * math.pi / 2.0)
+        cr.line_to(x2 - r, y1)
+        cr.arc(x2 - r, y1 + r, r, -math.pi / 2.0, math.pi / 2.0)
+        cr.line_to(x1 + r, y2)
+        cr.close_path()
 
-        if total_string_span < 15.0:
-            return
+        # Dark Cosmic Glass Surface Fill
+        cr.set_source_rgba(0.06, 0.07, 0.10, 0.95 * alpha)
+        cr.fill_preserve()
+
+        # Outer Soft Ambient Glow Stroke
+        cr.set_source_rgba(0.05, 0.22, 0.30, 0.80 * alpha)
+        cr.set_line_width(3.0)
+        cr.stroke_preserve()
+
+        # Sharp Glowing Cyan Glass Border
+        cr.set_source_rgba(0.13, 0.83, 0.93, 0.90 * alpha)
+        cr.set_line_width(1.6)
+        cr.stroke()
+
+        # Physical Anchors (seamless 0px gap to left & right inner border apexes)
+        x_left_anchor = x1
+        x_right_anchor = x2
+        total_span = x_right_anchor - x_left_anchor
 
         def _edge_envelope(nx: float) -> float:
-            """Smooth edge pinning so wave firmly anchors at x_left and x_right."""
             return math.sin(nx * math.pi) ** 0.85
 
         # =========================================================================
@@ -285,18 +320,20 @@ class FloatingHUD:
         # =========================================================================
         if state == "listening":
             num_bars = 28
-            bar_width = 3.0
-            bar_pad_x = offset_x + 8.0
-            bar_area_w = max(10.0, w - 16.0)
+            bar_pad_x = x_left_anchor + 6.0
+            bar_area_w = total_span - 12.0
             bar_spacing = bar_area_w / float(num_bars)
             max_bar_h = (h * 0.72) * min(1.0, progress * 1.2)
             min_bar_h = 4.0
+
+            cr.set_source_rgba(0.0, 0.95, 1.0, 0.95 * alpha)
+            cr.set_line_width(3.0)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
 
             for i in range(num_bars):
                 nx = i / float(num_bars - 1)
                 bx = bar_pad_x + (i + 0.5) * bar_spacing
 
-                # Multi-band voice frequency harmonics across the whole spectrum
                 freq_osc = (
                     math.sin(i * 1.05 - phase * 3.8) * 0.40 +
                     math.cos(i * 1.75 + phase * 2.6) * 0.35 +
@@ -304,150 +341,122 @@ class FloatingHUD:
                 )
                 harmonic = 0.50 + 0.50 * freq_osc
 
-                # Audio-level dynamic reactivity for all bars
                 dyn_h = min_bar_h + (max_bar_h - min_bar_h) * (level * 0.85 + 0.15) * harmonic
                 dyn_h = max(min_bar_h, min(max_bar_h, dyn_h))
 
-                self._canvas.create_line(
-                    bx, cy - (dyn_h / 2.0), bx, cy + (dyn_h / 2.0),
-                    fill=THEME_CYAN_CORE,
-                    width=bar_width,
-                    capstyle="round",
-                )
+                cr.move_to(bx, cy - (dyn_h / 2.0))
+                cr.line_to(bx, cy + (dyn_h / 2.0))
+                cr.stroke()
 
         # =========================================================================
         # STATE 2: PROCESSING (Bars Settle into Middle -> Fully Anchored String Waves)
         # =========================================================================
         elif state == "processing":
-            # Phase A: Bars settle vertically into the middle (morph: 0.0 -> 0.5)
             if morph <= 0.5:
-                collapse_k = 1.0 - (morph / 0.5)  # 1.0 -> 0.0
+                collapse_k = 1.0 - (morph / 0.5)
 
-                # 1. Continuous fully anchored baseline string
-                self._canvas.create_line(
-                    x_left_anchor, cy, x_right_anchor, cy,
-                    fill=THEME_CYAN_CORE,
-                    width=2.4,
-                    smooth=True,
-                )
+                # 1. Full-span baseline string
+                cr.set_source_rgba(0.0, 0.95, 1.0, 0.95 * alpha)
+                cr.set_line_width(2.2)
+                cr.move_to(x_left_anchor, cy)
+                cr.line_to(x_right_anchor, cy)
+                cr.stroke()
 
-                # 2. Draw bars across the full span compressing down into centerline
+                # 2. Compressing bars
                 if collapse_k > 0.05:
                     num_bars = 28
-                    bar_pad_x = offset_x + 8.0
-                    bar_area_w = max(10.0, w - 16.0)
+                    bar_pad_x = x_left_anchor + 6.0
+                    bar_area_w = total_span - 12.0
                     bar_spacing = bar_area_w / float(num_bars)
 
-                    for i in range(num_bars):
-                        nx = i / float(num_bars - 1)
-                        bx = bar_pad_x + (i + 0.5) * bar_spacing
+                    cr.set_source_rgba(0.22, 0.74, 0.97, 0.85 * alpha)
+                    cr.set_line_width(2.8 * collapse_k)
+                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
 
+                    for i in range(num_bars):
+                        bx = bar_pad_x + (i + 0.5) * bar_spacing
                         freq_osc = math.sin(i * 1.05 - phase * 3.8) * 0.5 + math.cos(i * 1.75 + phase * 2.6) * 0.5
                         harmonic = 0.50 + 0.50 * freq_osc
 
                         bar_h = max(2.0, (h * 0.65) * collapse_k * harmonic)
-                        self._canvas.create_line(
-                            bx, cy - (bar_h / 2.0), bx, cy + (bar_h / 2.0),
-                            fill=THEME_CYAN_GLOW,
-                            width=2.8 * collapse_k,
-                            capstyle="round",
-                        )
+                        cr.move_to(bx, cy - (bar_h / 2.0))
+                        cr.line_to(bx, cy + (bar_h / 2.0))
+                        cr.stroke()
 
-            # Phase B: The fully anchored string waves from border to border (morph: 0.5 -> 1.0)
+            # Phase B: The fully anchored string waves from border to border
             else:
-                wave_growth = (morph - 0.5) / 0.5  # 0.0 -> 1.0
+                wave_growth = (morph - 0.5) / 0.5
                 think_amp = (h * 0.28) * wave_growth * min(1.0, progress * 1.2)
                 step = 2.0
 
-                pts = []
-                glow_pts = []
-                for px in range(0, int(total_string_span) + 1, int(step)):
+                # Ambient glow wave
+                if wave_growth > 0.3:
+                    cr.set_source_rgba(0.22, 0.74, 0.97, 0.60 * alpha)
+                    cr.set_line_width(1.6)
+                    cr.move_to(x_left_anchor, cy)
+                    for px in range(0, int(total_span) + 1, int(step)):
+                        x = x_left_anchor + px
+                        nx = px / total_span
+                        env = _edge_envelope(nx)
+                        y_glow = cy + math.sin(nx * 12.0 + phase * 2.8) * (think_amp * 0.65 * env)
+                        cr.line_to(x, y_glow)
+                    cr.line_to(x_right_anchor, cy)
+                    cr.stroke()
+
+                # Core primary wave string
+                cr.set_source_rgba(0.0, 0.95, 1.0, 0.95 * alpha)
+                cr.set_line_width(2.4)
+                cr.move_to(x_left_anchor, cy)
+                for px in range(0, int(total_span) + 1, int(step)):
                     x = x_left_anchor + px
-                    nx = px / total_string_span
+                    nx = px / total_span
                     env = _edge_envelope(nx)
-
                     y_wave = cy + math.sin(nx * 8.0 - phase * 3.6) * (think_amp * env)
-                    pts.extend([x, y_wave])
-
-                    y_glow = cy + math.sin(nx * 12.0 + phase * 2.8) * (think_amp * 0.65 * env)
-                    glow_pts.extend([x, y_glow])
-
-                # Ensure exact connection to the right border
-                pts.extend([x_right_anchor, cy])
-                glow_pts.extend([x_right_anchor, cy])
-
-                if len(glow_pts) >= 4 and wave_growth > 0.3:
-                    self._canvas.create_line(
-                        glow_pts,
-                        fill=THEME_CYAN_GLOW,
-                        width=1.6,
-                        smooth=True,
-                    )
-                if len(pts) >= 4:
-                    self._canvas.create_line(
-                        pts,
-                        fill=THEME_CYAN_CORE,
-                        width=2.4,
-                        smooth=True,
-                    )
+                    cr.line_to(x, y_wave)
+                cr.line_to(x_right_anchor, cy)
+                cr.stroke()
 
         # =========================================================================
-        # STATE 3: DONE (Anchored String Waves Damp Down Until Flat & Still)
+        # STATE 3: DONE (String Wave Oscillations Damp Down Until Flat & Still)
         # =========================================================================
         elif state == "done":
             step = 2.0
             done_amp = (h * 0.28) * done_decay * min(1.0, progress)
 
-            # While wave is damping down
             if done_decay > 0.06:
-                pts = []
-                glow_pts = []
-                for px in range(0, int(total_string_span) + 1, int(step)):
+                # Ambient glow wave
+                if done_decay > 0.3:
+                    cr.set_source_rgba(0.22, 0.74, 0.97, 0.60 * alpha)
+                    cr.set_line_width(1.6)
+                    cr.move_to(x_left_anchor, cy)
+                    for px in range(0, int(total_span) + 1, int(step)):
+                        x = x_left_anchor + px
+                        nx = px / total_span
+                        env = _edge_envelope(nx)
+                        y_glow = cy + math.sin(nx * 12.0 + phase * 2.4) * (done_amp * 0.6 * env)
+                        cr.line_to(x, y_glow)
+                    cr.line_to(x_right_anchor, cy)
+                    cr.stroke()
+
+                # Primary wave string
+                cr.set_source_rgba(0.0, 0.95, 1.0, 0.95 * alpha)
+                cr.set_line_width(2.4)
+                cr.move_to(x_left_anchor, cy)
+                for px in range(0, int(total_span) + 1, int(step)):
                     x = x_left_anchor + px
-                    nx = px / total_string_span
+                    nx = px / total_span
                     env = _edge_envelope(nx)
-
                     y_wave = cy + math.sin(nx * 8.0 - phase * 3.0) * (done_amp * env)
-                    pts.extend([x, y_wave])
+                    cr.line_to(x, y_wave)
+                cr.line_to(x_right_anchor, cy)
+                cr.stroke()
 
-                    y_glow = cy + math.sin(nx * 12.0 + phase * 2.4) * (done_amp * 0.6 * env)
-                    glow_pts.extend([x, y_glow])
-
-                pts.extend([x_right_anchor, cy])
-                glow_pts.extend([x_right_anchor, cy])
-
-                if len(glow_pts) >= 4 and done_decay > 0.3:
-                    self._canvas.create_line(glow_pts, fill=THEME_CYAN_GLOW, width=1.6, smooth=True)
-                if len(pts) >= 4:
-                    self._canvas.create_line(pts, fill=THEME_CYAN_CORE, width=2.4, smooth=True)
-
-            # Once oscillations stop completely: Flat string firmly anchored to left and right borders
+            # Flat stopped resting string
             else:
-                self._canvas.create_line(
-                    x_left_anchor, cy, x_right_anchor, cy,
-                    fill=THEME_CYAN_CORE,
-                    width=2.4,
-                    smooth=True,
-                )
+                cr.set_source_rgba(0.0, 0.95, 1.0, 0.95 * alpha)
+                cr.set_line_width(2.4)
+                cr.move_to(x_left_anchor, cy)
+                cr.line_to(x_right_anchor, cy)
+                cr.stroke()
 
-    def _get_capsule_polygon(self, x1: float, y1: float, x2: float, y2: float, segments: int = 36) -> list[float]:
-        """Compute exact high-density trigonometric circular arcs for a seamless capsule window."""
-        h = max(2.0, y2 - y1)
-        r = h / 2.0
-        cx_r = max(x1 + r, x2 - r)
-        cx_l = x1 + r
-        cy = y1 + r
-
-        pts: list[float] = []
-
-        # Right Semicircle Cap (-pi/2 -> +pi/2)
-        for i in range(segments + 1):
-            theta = -math.pi / 2.0 + (math.pi * i / segments)
-            pts.extend([cx_r + r * math.cos(theta), cy + r * math.sin(theta)])
-
-        # Left Semicircle Cap (+pi/2 -> +3*pi/2)
-        for i in range(segments + 1):
-            theta = math.pi / 2.0 + (math.pi * i / segments)
-            pts.extend([cx_l + r * math.cos(theta), cy + r * math.sin(theta)])
-
-        return pts
+        return False

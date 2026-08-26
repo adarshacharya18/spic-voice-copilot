@@ -10,6 +10,19 @@ import sys
 import time
 from pathlib import Path
 
+# Force X11 backend for GDK on Wayland so window coordinates (top-middle) are respected
+os.environ["GDK_BACKEND"] = "x11"
+if "/usr/lib/python3/dist-packages" not in sys.path:
+    sys.path.append("/usr/lib/python3/dist-packages")
+
+try:
+    import gi
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk
+    Gdk.set_allowed_backends("x11")
+except Exception:
+    pass
+
 # Ensure root repository directory is in sys.path when directly invoked by desktop shortcuts
 _ROOT_DIR = str(Path(__file__).resolve().parent.parent)
 if _ROOT_DIR not in sys.path:
