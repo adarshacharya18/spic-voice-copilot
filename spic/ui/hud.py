@@ -1,4 +1,4 @@
-"""High-fidelity floating HUD with fluid harmonic waves and seamless capsule physics."""
+"""High-fidelity floating HUD with 60 FPS fluid harmonic waves and spring transitions."""
 
 from __future__ import annotations
 
@@ -10,32 +10,31 @@ import tkinter as tk
 
 from spic.config import UIConfig
 
-# Unified dark glass aesthetic
-HUD_BG_COLOR = "#12131C"
+HUD_SURFACE_BG = "#13141F"
 
 
 def _ease_out_back(t: float) -> float:
-    """Natural spring overshoot easing curve."""
-    c1 = 1.2
+    """Spring overshoot easing curve."""
+    c1 = 1.35
     c3 = c1 + 1.0
     return 1.0 + c3 * ((t - 1.0) ** 3) + c1 * ((t - 1.0) ** 2)
 
 
 def _ease_in_cubic(t: float) -> float:
-    """Smooth acceleration exit curve."""
+    """Smooth exit easing curve."""
     return t * t * t
 
 
 class FloatingHUD:
-    """Minimalist floating desktop pill with fluid harmonic waves and seamless corner geometry."""
+    """Ultra-smooth floating desktop HUD with 60 FPS fluid wave visualizer."""
 
     def __init__(self, config: UIConfig):
         self.config = config
         self._state: Literal["listening", "processing", "done"] = "listening"
         self._visibility: Literal["hidden", "entering", "visible", "exiting"] = "hidden"
-        self._anim_progress = 0.0  # 0.0 (hidden) to 1.0 (fully visible)
-        self._audio_level = 0.1
-        self._target_audio_level = 0.1
+        self._anim_progress = 0.0
+        self._audio_level = 0.15
+        self._target_audio_level = 0.15
         self._phase = 0.0
         self._done_progress = 0.0
         self._root: Optional[tk.Tk] = None
@@ -44,11 +43,10 @@ class FloatingHUD:
         self._running = False
         self._lock = threading.Lock()
 
-        # Layout constants
-        self._base_width = max(160, self.config.hud_width or 170)
-        self._base_height = max(38, self.config.hud_height or 42)
-        self._target_y = 32
-        self._spawn_y = -20
+        # Fixed viewport dimensions (prevents Wayland window resizing jitter)
+        self._win_w = max(180, self.config.hud_width or 190)
+        self._win_h = max(42, self.config.hud_height or 46)
+        self._pos_y = 30  # Screen top offset
 
     def start(self) -> None:
         """Start the HUD window in a background GUI thread."""
@@ -94,9 +92,9 @@ class FloatingHUD:
             self._done_progress = 1.0
         self._trigger_update()
 
-        # Hold done wave for 600ms then gracefully exit
+        # Hold done wave for 650ms then gracefully exit
         def _delayed_exit():
-            time.sleep(0.6)
+            time.sleep(0.65)
             self.hide()
 
         threading.Thread(target=_delayed_exit, daemon=True).start()
@@ -122,20 +120,19 @@ class FloatingHUD:
                 pass
 
     def _run_gui(self) -> None:
-        """Internal Tkinter GUI loop with 60 FPS spring physics."""
+        """Internal Tkinter GUI loop with stable 60 FPS rendering."""
         try:
             self._root = tk.Tk()
             self._root.title("Spic Wave")
-            self._root.overrideredirect(True)  # Frameless overlay
+            self._root.overrideredirect(True)  # Frameless
             self._root.attributes("-topmost", True)  # Always on top
 
             screen_w = self._root.winfo_screenwidth()
-            win_w = self._base_width
-            win_h = self._base_height
-            pos_x = (screen_w - win_w) // 2
+            pos_x = (screen_w - self._win_w) // 2
 
-            self._root.geometry(f"{win_w}x{win_h}+{pos_x}+{self._spawn_y}")
-            self._root.configure(bg=HUD_BG_COLOR)
+            # Set geometry ONCE to avoid Wayland buffer re-allocation lag
+            self._root.geometry(f"{self._win_w}x{self._win_h}+{pos_x}+{self._pos_y}")
+            self._root.configure(bg=HUD_SURFACE_BG)
 
             try:
                 self._root.attributes("-alpha", 0.0)
@@ -144,9 +141,9 @@ class FloatingHUD:
 
             self._canvas = tk.Canvas(
                 self._root,
-                width=win_w,
-                height=win_h,
-                bg=HUD_BG_COLOR,
+                width=self._win_w,
+                height=self._win_h,
+                bg=HUD_SURFACE_BG,
                 highlightthickness=0,
             )
             self._canvas.pack(fill="both", expand=True)
@@ -164,18 +161,18 @@ class FloatingHUD:
 
         with self._lock:
             if self._visibility == "entering":
-                self._anim_progress += 0.09
+                self._anim_progress += 0.08
                 if self._anim_progress >= 1.0:
                     self._anim_progress = 1.0
                     self._visibility = "visible"
 
             elif self._visibility == "exiting":
-                self._anim_progress -= 0.08
+                self._anim_progress -= 0.075
                 if self._anim_progress <= 0.0:
                     self._anim_progress = 0.0
                     self._visibility = "hidden"
 
-            self._audio_level += (self._target_audio_level - self._audio_level) * 0.25
+            self._audio_level += (self._target_audio_level - self._audio_level) * 0.22
             self._target_audio_level *= 0.96
             self._phase += 0.12
 
@@ -188,7 +185,7 @@ class FloatingHUD:
             self._root.after(16, self._animate_loop)
 
     def _render_frame(self) -> None:
-        """Render seamless capsule with fluid wave dynamics."""
+        """Render seamless capsule with smooth Bezier harmonic waves."""
         if not self._root or not self._canvas:
             return
 
@@ -206,77 +203,81 @@ class FloatingHUD:
         else:
             self._root.deiconify()
 
-        # =========================================================================
-        # 1. Dynamic Geometry Scaling & Alpha
-        # =========================================================================
-        screen_w = self._root.winfo_screenwidth()
-        base_w = self._base_width
-        base_h = self._base_height
-
+        # Update Alpha smoothly based on visibility
         if vis == "entering":
-            eased = _ease_out_back(progress)
-            curr_y = int(self._spawn_y + (self._target_y - self._spawn_y) * eased)
-            curr_alpha = min(0.96, progress * 1.1)
-            scale_x = max(0.4, min(1.05, 0.4 + 0.65 * eased))
+            curr_alpha = min(0.95, progress * 1.1)
+            scale = max(0.4, min(1.04, 0.4 + 0.64 * _ease_out_back(progress)))
         elif vis == "exiting":
             eased = _ease_in_cubic(progress)
-            curr_y = int(self._spawn_y + (self._target_y - self._spawn_y) * eased)
-            curr_alpha = max(0.0, progress * 0.96)
-            scale_x = max(0.3, eased)
+            curr_alpha = max(0.0, progress * 0.95)
+            scale = max(0.3, eased)
         else:
-            curr_y = self._target_y
-            curr_alpha = 0.96
-            scale_x = 1.0
-
-        curr_w = int(base_w * scale_x)
-        pos_x = (screen_w - curr_w) // 2
+            curr_alpha = 0.95
+            scale = 1.0
 
         try:
-            self._root.geometry(f"{curr_w}x{base_h}+{pos_x}+{curr_y}")
             self._root.attributes("-alpha", curr_alpha)
         except Exception:
             pass
 
         self._canvas.delete("all")
-        cy = base_h / 2.0
-        w = float(curr_w)
-        h = float(base_h)
+        win_w = float(self._win_w)
+        win_h = float(self._win_h)
+        cy = win_h / 2.0
 
-        if w < 20:
-            return
+        # Dynamic internal scaling (rendered on canvas, avoiding window resize lag)
+        w = win_w * scale
+        h = win_h
+        offset_x = (win_w - w) / 2.0
+        offset_y = 0.0
 
-        # =========================================================================
-        # 2. Seamless Single-Piece Capsule (100% Matching Geometry & Fill)
-        # =========================================================================
+        # State accent colors
         if state == "listening":
             border_color = "#FF3B30"
+            border_glow = "#591B24"
         elif state == "processing":
             border_color = "#00F2FE"
+            border_glow = "#10324F"
         elif state == "done":
             border_color = "#10B981"
+            border_glow = "#123B28"
         else:
             border_color = "#3A3C52"
+            border_glow = "#1E202E"
 
-        # Generate exact trigonometric vertices covering full window boundaries
-        capsule_pts = self._get_capsule_polygon(1.0, 1.0, w - 1.0, h - 1.0)
+        # 1. Outer Glow Border
+        outer_pts = self._get_capsule_polygon(offset_x + 1.0, offset_y + 1.0, offset_x + w - 1.0, offset_y + h - 1.0)
         self._canvas.create_polygon(
-            capsule_pts,
-            fill=HUD_BG_COLOR,
-            outline=border_color,
-            width=1.8,
+            outer_pts,
+            fill=HUD_SURFACE_BG,
+            outline=border_glow,
+            width=2.5,
             smooth=False,
         )
 
-        # Padding for waves inside capsule
-        pad_x = max(12.0, (h / 2.0) - 2.0)
-        wave_w = max(10.0, w - (pad_x * 2.0))
+        # 2. Crisp Primary Stroke
+        inner_pts = self._get_capsule_polygon(offset_x + 2.0, offset_y + 2.0, offset_x + w - 2.0, offset_y + h - 2.0)
+        self._canvas.create_polygon(
+            inner_pts,
+            fill=HUD_SURFACE_BG,
+            outline=border_color,
+            width=1.5,
+            smooth=False,
+        )
+
+        # 3. Waveform Margins
+        pad_x = offset_x + max(16.0, (h / 2.0))
+        wave_w = max(10.0, w - (pad_x * 2.0 - offset_x * 2.0))
+        if wave_w < 15.0:
+            return
+
         step = 2.5
 
         # =========================================================================
-        # STATE 1: LISTENING WAVE (Crimson / Coral Audio Reactive Splines)
+        # STATE 1: LISTENING WAVE (Crimson & Coral Audio Reactive Splines)
         # =========================================================================
         if state == "listening":
-            max_amp = (h * 0.36) * max(0.18, level) * min(1.0, progress * 1.2)
+            max_amp = (h * 0.35) * max(0.18, level) * min(1.0, progress * 1.2)
 
             pts1, pts2, pts3 = [], [], []
             for px in range(0, int(wave_w) + 1, int(step)):
@@ -298,10 +299,10 @@ class FloatingHUD:
             if len(pts2) >= 4:
                 self._canvas.create_line(pts2, fill="#FF6B6B", width=1.8, smooth=True)
             if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#FF3B30", width=2.6, smooth=True)
+                self._canvas.create_line(pts1, fill="#FF3B30", width=2.8, smooth=True)
 
         # =========================================================================
-        # STATE 2: THINKING WAVE (Cyan / Violet Flow Ribbon)
+        # STATE 2: THINKING WAVE (Neon Cyan & Violet Flow Ribbon)
         # =========================================================================
         elif state == "processing":
             think_amp = (h * 0.28) * min(1.0, progress * 1.2)
@@ -326,7 +327,7 @@ class FloatingHUD:
             if len(pts2) >= 4:
                 self._canvas.create_line(pts2, fill="#38BDF8", width=2.0, smooth=True)
             if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#00F2FE", width=2.6, smooth=True)
+                self._canvas.create_line(pts1, fill="#00F2FE", width=2.8, smooth=True)
 
         # =========================================================================
         # STATE 3: DONE WAVE (Emerald Settling Wave)
@@ -348,9 +349,9 @@ class FloatingHUD:
             if len(pts2) >= 4:
                 self._canvas.create_line(pts2, fill="#6EE7B7", width=1.6, smooth=True)
             if len(pts1) >= 4:
-                self._canvas.create_line(pts1, fill="#10B981", width=2.4, smooth=True)
+                self._canvas.create_line(pts1, fill="#10B981", width=2.6, smooth=True)
 
-    def _get_capsule_polygon(self, x1: float, y1: float, x2: float, y2: float, segments: int = 20) -> list[float]:
+    def _get_capsule_polygon(self, x1: float, y1: float, x2: float, y2: float, segments: int = 24) -> list[float]:
         """Compute exact trigonometric circular arcs for a seamless capsule."""
         h = max(2.0, y2 - y1)
         r = h / 2.0

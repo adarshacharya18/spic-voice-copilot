@@ -180,6 +180,40 @@ def cmd_test_injection(args) -> None:
         print("❌ Injection failed.")
 
 
+def cmd_test_ui(args) -> None:
+    """Test floating HUD wave animations and transitions interactively."""
+    import math
+    from spic.ui.hud import FloatingHUD
+
+    config = load_config()
+    hud = FloatingHUD(config.ui)
+
+    print("\n============================================================")
+    print(" 🎨 Spic Floating HUD Animation Test")
+    print("============================================================")
+    print("Launching floating wave HUD...")
+    hud.start()
+    time.sleep(0.3)
+
+    print("1. [Entering & Listening] Crimson & Coral Audio Reactive Waves (3.5s)...")
+    hud.show_listening()
+    for i in range(30):
+        simulated_rms = 0.05 + abs(math.sin(i * 0.35)) * 0.5
+        hud.update_audio_level(simulated_rms)
+        time.sleep(0.12)
+
+    print("2. [Processing / Thinking] Electric Cyan & Violet Flow Ribbon (2.5s)...")
+    hud.show_processing()
+    time.sleep(2.5)
+
+    print("3. [Done & Settling] Emerald Green Pulse & Upward Exit Glide (1.5s)...")
+    hud.show_done()
+    time.sleep(1.5)
+
+    hud.stop()
+    print("✅ Animation cycle completed successfully!\n")
+
+
 def cmd_setup_shortcuts(args) -> None:
     """Configure and register GNOME global shortcuts with conflict detection."""
     from spic.shortcuts import (
@@ -367,6 +401,11 @@ def main() -> None:
     p_inj = subparsers.add_parser("test-injection", help="Test text injection into active window")
     p_inj.add_argument("--text", type=str, default=None, help="Text to inject")
     p_inj.set_defaults(func=cmd_test_injection)
+
+    # test-ui (alias: test-hud)
+    for ui_cmd in ("test-ui", "test-hud"):
+        p_ui = subparsers.add_parser(ui_cmd, help="Test floating wave HUD animations")
+        p_ui.set_defaults(func=cmd_test_ui)
 
     # setup-shortcuts (alias: shortcuts)
     for cmd_name in ("setup-shortcuts", "shortcuts"):
