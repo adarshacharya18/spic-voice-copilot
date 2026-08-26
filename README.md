@@ -144,14 +144,14 @@ Spic is configured via `~/.config/spic/config.json`:
 
 ```mermaid
 flowchart LR
-    Mic[🎤 Microphone] -->|PipeWire PCM| STT[Whisper Base int8]
-    STT --> Router{Interpreter Router}
-    Router -->|Fast Mode| Rules[Deterministic Rule Cleaner]
-    Router -->|Smart Mode| LLM[Ollama / Groq / Gemini]
-    Rules --> Injector[Universal Injector]
+    Mic["🎤 Microphone"] -->|PipeWire PCM| STT["Whisper Base int8"]
+    STT --> Router{"Interpreter Router"}
+    Router -->|Fast Mode| Rules["Deterministic Rule Cleaner"]
+    Router -->|Smart Mode| LLM["Ollama / Groq / Gemini"]
+    Rules --> Injector["Universal Injector"]
     LLM --> Injector
-    Injector -->|Hardware Keystrokes| UInput[/dev/uinput Kernel Device]
-    UInput --> App[Focused Window]
+    Injector -->|Hardware Keystrokes| UInput["Kernel /dev/uinput Device"]
+    UInput --> App["Focused Active Window"]
 ```
 
 *For in-depth architectural details and sequence flows, see [docs/architecture.md](docs/architecture.md).*
