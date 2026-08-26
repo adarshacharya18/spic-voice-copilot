@@ -293,18 +293,31 @@ class FloatingHUD:
         cr.line_to(x1 + r, y2)
         cr.close_path()
 
-        # Dark Cosmic Glass Surface Fill
-        cr.set_source_rgba(0.06, 0.07, 0.10, 0.95 * alpha)
+        # Pure Colorless Neutral Frosted Glass Surface Fill
+        glass_pat = cairo.LinearGradient(0, y1, 0, y2)
+        glass_pat.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.12 * alpha)  # Subtle white frost at top
+        glass_pat.add_color_stop_rgba(0.5, 0.0, 0.0, 0.0, 0.10 * alpha)  # Neutral sheer glass in middle
+        glass_pat.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.05 * alpha)  # Sheer bottom reflection
+        cr.set_source(glass_pat)
         cr.fill_preserve()
 
         # Outer Soft Ambient Glow Stroke
-        cr.set_source_rgba(0.05, 0.22, 0.30, 0.80 * alpha)
-        cr.set_line_width(3.0)
+        cr.set_source_rgba(0.05, 0.28, 0.40, 0.50 * alpha)
+        cr.set_line_width(2.6)
         cr.stroke_preserve()
 
-        # Sharp Glowing Cyan Glass Border
-        cr.set_source_rgba(0.13, 0.83, 0.93, 0.90 * alpha)
+        # Signature Sharp Glowing Cyan Glass Border
+        cr.set_source_rgba(0.13, 0.83, 0.93, 0.85 * alpha)
         cr.set_line_width(1.6)
+        cr.stroke()
+
+        # Top Specular Light Reflection
+        cr.new_path()
+        cr.arc(x1 + r, y1 + r, r, math.pi * 0.75, math.pi * 1.5)
+        cr.line_to(x2 - r, y1)
+        cr.arc(x2 - r, y1 + r, r, -math.pi * 0.5, -math.pi * 0.25)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.25 * alpha)
+        cr.set_line_width(1.0)
         cr.stroke()
 
         # Physical Anchors (seamless 0px gap to left & right inner border apexes)
