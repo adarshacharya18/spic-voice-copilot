@@ -339,51 +339,62 @@ class FloatingHUD:
                 self._canvas.create_line(pts1, fill="#10B981", width=2.6, smooth=True)
 
     def _draw_pill_container(self, x1: float, y1: float, x2: float, y2: float, state: str) -> None:
-        """Draw capsule container with state ambient border glow."""
-        h = y2 - y1
-        r = max(2.0, h / 2.0 - 2.0)
+        """Draw a mathematically precise capsule container with seamless border and background alignment."""
+        if x2 - x1 < 10:
+            return
 
+        # State-reactive glowing ambient border colors
         if state == "listening":
-            border_color = "#3A1E24"
-            glow_color = "#1F1216"
+            border_color = "#FF453A"
+            glow_outline = "#591B24"
         elif state == "processing":
-            border_color = "#1E2A3A"
-            glow_color = "#121924"
+            border_color = "#38BDF8"
+            glow_outline = "#18324F"
         elif state == "done":
-            border_color = "#1E3A2A"
-            glow_color = "#122419"
+            border_color = "#10B981"
+            glow_outline = "#15422D"
         else:
-            border_color = "#232433"
-            glow_color = "#13141F"
+            border_color = "#3B3D54"
+            glow_outline = "#1E202E"
 
+        # Outer subtle ambient glow stroke
+        outer_pts = self._get_capsule_polygon(x1 + 0.5, y1 + 0.5, x2 - 0.5, y2 - 0.5)
         self._canvas.create_polygon(
-            self._pill_coords(x1 + 1, y1 + 1, x2 - 1, y2 - 1, r),
-            fill=glow_color,
+            outer_pts,
+            fill="#0D0E15",
+            outline=glow_outline,
+            width=2.5,
+            smooth=False,
+        )
+
+        # Crisp inner border and unified dark glass surface
+        inner_pts = self._get_capsule_polygon(x1 + 1.5, y1 + 1.5, x2 - 1.5, y2 - 1.5)
+        self._canvas.create_polygon(
+            inner_pts,
+            fill="#0D0E15",
             outline=border_color,
             width=1.5,
-            smooth=True,
+            smooth=False,
         )
 
-        self._canvas.create_polygon(
-            self._pill_coords(x1 + 3, y1 + 3, x2 - 3, y2 - 3, max(1.0, r - 2)),
-            fill="#0D0E15",
-            outline="",
-            smooth=True,
-        )
+    def _get_capsule_polygon(self, x1: float, y1: float, x2: float, y2: float, segments: int = 18) -> list[float]:
+        """Compute exact trigonometric vertices for a pixel-perfect circular capsule."""
+        h = max(2.0, y2 - y1)
+        r = h / 2.0
+        cx_r = max(x1 + r, x2 - r)
+        cx_l = x1 + r
+        cy = y1 + r
 
-    def _pill_coords(self, x1: float, y1: float, x2: float, y2: float, r: float) -> list[float]:
-        """Polygon coords for rounded capsule."""
-        return [
-            x1 + r, y1,
-            x2 - r, y1,
-            x2, y1,
-            x2, y1 + r,
-            x2, y2 - r,
-            x2, y2,
-            x2 - r, y2,
-            x1 + r, y2,
-            x1, y2,
-            x1, y2 - r,
-            x1, y1 + r,
-            x1, y1,
-        ]
+        pts: list[float] = []
+
+        # 1. Right Semicircle Cap (-pi/2 -> +pi/2)
+        for i in range(segments + 1):
+            theta = -math.pi / 2.0 + (math.pi * i / segments)
+            pts.extend([cx_r + r * math.cos(theta), cy + r * math.sin(theta)])
+
+        # 2. Left Semicircle Cap (+pi/2 -> +3*pi/2)
+        for i in range(segments + 1):
+            theta = math.pi / 2.0 + (math.pi * i / segments)
+            pts.extend([cx_l + r * math.cos(theta), cy + r * math.sin(theta)])
+
+        return pts
