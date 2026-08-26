@@ -72,6 +72,11 @@ Spic bypasses Wayland application sandboxing using **Linux Kernel `/dev/uinput`*
   - **Thinking Wave:** Electric Cyan (`#00F2FE`) & Neon Purple traveling quantum flow ribbon.
   - **Done Wave:** Emerald Green (`#10B981`) settling pulse.
 
+### F. Desktop Introspection & Conflict Detection (`spic.shortcuts`)
+- **Multi-Schema Introspection:** Dynamically queries GNOME `gsettings` across `org.gnome.desktop.wm.keybindings`, `org.gnome.shell.keybindings`, `org.gnome.settings-daemon.plugins.media-keys`, and custom user paths to build an index of all occupied key combinations.
+- **Conflict Prevention:** When configuring custom hotkeys, Spic cross-references the requested combination against the active system keymap, displaying the exact desktop action it belongs to and preventing accidental overwrites.
+- **Free Key Recommender:** Scans a curated ergonomics catalog against the system keymap and guides the user to 100% free, unassigned shortcut candidates.
+
 ---
 
 ## 3. End-to-End Latency Profile

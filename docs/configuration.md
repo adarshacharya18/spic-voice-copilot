@@ -46,6 +46,10 @@ The configuration file is secured with strict `0600` file permissions (accessibl
     "hud_theme": "red_waveform",
     "hud_width": 170,
     "hud_height": 42
+  },
+  "shortcuts": {
+    "fast_dictation": "<Control><Alt>space",
+    "smart_copilot": "<Control><Super>space"
   }
 }
 ```
@@ -144,3 +148,31 @@ Or in `config.json`:
 - `hud_width`: Width of the floating pill (default: `170px`).
 - `hud_height`: Height of the floating pill (default: `42px`).
 - `show_hud`: Set to `false` to run in completely invisible headless mode.
+
+---
+
+## 5. Hotkeys & Shortcut Management (`shortcuts`)
+
+Spic supports custom system-level shortcuts with built-in GNOME desktop conflict detection:
+
+| Field | Default Value | Description |
+|---|---|---|
+| `fast_dictation` | `<Control><Alt>space` | Global trigger for instant voice dictation (<300ms) |
+| `smart_copilot` | `<Control><Super>space` | Global trigger for smart LLM voice copilot |
+
+### Shortcut Management CLI Commands:
+
+```bash
+# 1. Interactive configuration wizard (recommends free keys & warns on conflicts)
+python3 -m spic.cli shortcuts
+
+# 2. List all verified free & unassigned hotkeys on your desktop
+python3 -m spic.cli shortcuts --list-free
+
+# 3. Check if a specific shortcut has desktop conflicts
+python3 -m spic.cli shortcuts --check "ctrl+alt+m"
+
+# 4. Set custom shortcuts directly
+python3 -m spic.cli shortcuts --fast "ctrl+alt+m" --smart "ctrl+super+k"
+```
+
