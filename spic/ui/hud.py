@@ -265,33 +265,41 @@ class FloatingHUD:
             smooth=False,
         )
 
-        # 3. Waveform Margins
-        pad_x = offset_x + max(16.0, (h / 2.0))
-        wave_w = max(10.0, w - (pad_x * 2.0 - offset_x * 2.0))
+        # 3. Waveform Margins (Spans Full Width from Start to End)
+        pad_x = offset_x + 6.0
+        wave_w = max(10.0, w - 12.0)
         if wave_w < 15.0:
             return
 
-        step = 2.5
+        step = 2.0
+
+        def _edge_envelope(nx: float) -> float:
+            """Smooth edge softening only at extreme 6% edges for seamless cap anchoring."""
+            if nx < 0.06:
+                return math.sin((nx / 0.06) * (math.pi / 2.0))
+            elif nx > 0.94:
+                return math.sin(((1.0 - nx) / 0.06) * (math.pi / 2.0))
+            return 1.0
 
         # =========================================================================
         # STATE 1: LISTENING WAVE (Crimson & Coral Audio Reactive Splines)
         # =========================================================================
         if state == "listening":
-            max_amp = (h * 0.35) * max(0.18, level) * min(1.0, progress * 1.2)
+            max_amp = (h * 0.36) * max(0.20, level) * min(1.0, progress * 1.2)
 
             pts1, pts2, pts3 = [], [], []
             for px in range(0, int(wave_w) + 1, int(step)):
                 x = pad_x + px
                 nx = px / wave_w
-                env = math.sin(nx * math.pi) ** 1.5
+                env = _edge_envelope(nx)
 
-                y1 = cy + math.sin(nx * 14.0 - phase * 3.0) * (max_amp * env)
+                y1 = cy + math.sin(nx * 10.0 - phase * 3.2) * (max_amp * env)
                 pts1.extend([x, y1])
 
-                y2 = cy + math.sin(nx * 19.0 + phase * 2.2) * math.cos(nx * 6.0 - phase * 1.5) * (max_amp * 0.75 * env)
+                y2 = cy + math.sin(nx * 14.0 + phase * 2.4) * math.cos(nx * 5.0 - phase * 1.6) * (max_amp * 0.78 * env)
                 pts2.extend([x, y2])
 
-                y3 = cy + math.sin(nx * 26.0 - phase * 4.0) * (max_amp * 0.45 * env)
+                y3 = cy + math.sin(nx * 18.0 - phase * 4.0) * (max_amp * 0.48 * env)
                 pts3.extend([x, y3])
 
             if len(pts3) >= 4:
@@ -311,15 +319,15 @@ class FloatingHUD:
             for px in range(0, int(wave_w) + 1, int(step)):
                 x = pad_x + px
                 nx = px / wave_w
-                env = math.sin(nx * math.pi) ** 1.4
+                env = _edge_envelope(nx)
 
-                y1 = cy + math.sin(nx * 10.0 - phase * 3.5) * (think_amp * env)
+                y1 = cy + math.sin(nx * 8.0 - phase * 3.6) * (think_amp * env)
                 pts1.extend([x, y1])
 
-                y2 = cy + math.sin(nx * 15.0 + phase * 2.8) * math.cos(nx * 8.0 - phase * 1.8) * (think_amp * 0.85 * env)
+                y2 = cy + math.sin(nx * 12.0 + phase * 2.8) * math.cos(nx * 6.0 - phase * 1.8) * (think_amp * 0.85 * env)
                 pts2.extend([x, y2])
 
-                y3 = cy + math.cos(nx * 22.0 - phase * 4.2) * (think_amp * 0.5 * env)
+                y3 = cy + math.cos(nx * 16.0 - phase * 4.4) * (think_amp * 0.52 * env)
                 pts3.extend([x, y3])
 
             if len(pts3) >= 4:
@@ -333,16 +341,16 @@ class FloatingHUD:
         # STATE 3: DONE WAVE (Emerald Settling Wave)
         # =========================================================================
         elif state == "done":
-            done_amp = (h * 0.22) * done_prog * min(1.0, progress)
+            done_amp = (h * 0.24) * done_prog * min(1.0, progress)
 
             pts1, pts2 = [], []
             for px in range(0, int(wave_w) + 1, int(step)):
                 x = pad_x + px
                 nx = px / wave_w
-                env = math.sin(nx * math.pi) ** 1.6
+                env = _edge_envelope(nx)
 
-                y1 = cy + math.sin(nx * 12.0 - phase * 1.8) * (done_amp * env)
-                y2 = cy + math.cos(nx * 16.0 + phase * 1.4) * (done_amp * 0.6 * env)
+                y1 = cy + math.sin(nx * 9.0 - phase * 2.0) * (done_amp * env)
+                y2 = cy + math.cos(nx * 13.0 + phase * 1.6) * (done_amp * 0.62 * env)
                 pts1.extend([x, y1])
                 pts2.extend([x, y2])
 
