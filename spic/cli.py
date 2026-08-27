@@ -54,6 +54,35 @@ def send_ipc_trigger(smart: bool = False) -> bool:
         return False
 
 
+def send_ipc_stream_trigger(start: bool = True) -> bool:
+    """Send stream start or stop command to running daemon socket."""
+    if not SOCKET_FILE.exists():
+        print("[Spic] Daemon is not currently running. Start it with: python -m spic.cli start")
+        return False
+
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(str(SOCKET_FILE))
+        msg = b"STREAM_START\n" if start else b"STREAM_STOP\n"
+        client.sendall(msg)
+        response = client.recv(1024).decode("utf-8").strip()
+        client.close()
+        return response == "OK"
+    except Exception as e:
+        print(f"[Spic] Failed to communicate with daemon: {e}")
+        return False
+
+
+def cmd_trigger_stream(args) -> None:
+    """Trigger the daemon stream dictation mode (start/stop)."""
+    start_mode = not args.stop
+    action = "START" if start_mode else "STOP"
+    print(f"[Spic] Sending STREAM_{action} to daemon...")
+    success = send_ipc_stream_trigger(start=start_mode)
+    if not success:
+        sys.exit(1)
+
+
 def cmd_start(args) -> None:
     """Run the Spic background daemon."""
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -373,6 +402,60 @@ def cmd_setup_shortcuts(args) -> None:
         print("❌ Failed to register shortcuts in GNOME settings.\n")
 
 
+def cmd_test_stream(args) -> None:
+    """Test continuous On-the-GO stream dictation standalone with live live transcription and injection."""
+    from spic.audio.stream_recorder import StreamAudioRecorder
+    from spic.stt.engine import STTEngine
+    from spic.stt.stream_worker import StreamTranscriptionWorker
+    from spic.injector.input_injector import InputInjector
+
+    config = load_config()
+    stt = STTEngine(config.stt)
+    injector = InputInjector(config.injection)
+
+    duration = args.duration if hasattr(args, "duration") and args.duration else 10
+
+    print("\n" + "=" * 60)
+    print(" ⚡ Spic On-the-GO Stream Dictation Live Test")
+    print("=" * 60)
+    print(f"Starting continuous stream for {duration} seconds...")
+    print("Speak freely into your microphone with natural pauses.")
+    print("Each sentence will be transcribed and injected on the fly!\n")
+
+    def _on_injected(text):
+        print(f"\n  👉 [Live Chunk Injected]: \"{text}\"")
+
+    worker = StreamTranscriptionWorker(
+        stt=stt,
+        injector=injector,
+        smart_spacing=config.stream.smart_spacing,
+        on_chunk_injected=_on_injected,
+    )
+    worker.start()
+
+    recorder = StreamAudioRecorder(
+        sample_rate=config.audio.sample_rate,
+        chunk_pause_threshold_seconds=config.stream.chunk_pause_threshold_seconds,
+        max_chunk_duration_seconds=config.stream.max_chunk_duration_seconds,
+        on_chunk_ready=worker.enqueue_chunk,
+    )
+
+    try:
+        recorder.start_stream()
+        for i in range(duration, 0, -1):
+            sys.stdout.write(f"\r🎙️ Listening continuously... ({i}s remaining) ")
+            sys.stdout.flush()
+            time.sleep(1)
+        print("\n\nStopping stream and finalizing remaining audio...")
+        recorder.stop_stream()
+        worker.stop(wait=True)
+        print("✅ Stream session test finished!\n")
+    except KeyboardInterrupt:
+        print("\nInterrupted. Finalizing stream...")
+        recorder.stop_stream()
+        worker.stop(wait=True)
+
+
 def cmd_config(args) -> None:
     """Display current config."""
     config = load_config()
@@ -392,6 +475,17 @@ def main() -> None:
     p_trig = subparsers.add_parser("trigger", help="Send trigger signal to running daemon")
     p_trig.add_argument("--smart", action="store_true", help="Trigger in smart LLM interpretation mode")
     p_trig.set_defaults(func=cmd_trigger)
+
+    # trigger-stream
+    p_trig_st = subparsers.add_parser("trigger-stream", help="Trigger stream dictation start/stop on running daemon")
+    p_trig_st.add_argument("--start", action="store_true", default=True, help="Start stream dictation (default)")
+    p_trig_st.add_argument("--stop", action="store_true", help="Stop stream dictation")
+    p_trig_st.set_defaults(func=cmd_trigger_stream)
+
+    # test-stream
+    p_tstream = subparsers.add_parser("test-stream", help="Test continuous on-the-go stream dictation live")
+    p_tstream.add_argument("--duration", type=int, default=10, help="Test stream duration in seconds (default: 10)")
+    p_tstream.set_defaults(func=cmd_test_stream)
 
     # test-mic
     p_mic = subparsers.add_parser("test-mic", help="Test microphone capture & volume")

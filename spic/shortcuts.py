@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from typing import Optional
+import threading
+from typing import Callable, Optional
 
 logger = logging.getLogger("spic.shortcuts")
 
@@ -233,3 +234,304 @@ def register_gnome_shortcuts(
     except Exception as e:
         logger.error(f"Failed to register GNOME shortcuts: {e}")
         return False
+
+
+def _normalize_pynput_key(k: object) -> Optional[object]:
+    """Map left/right variants and ASCII control characters to canonical key identifiers for pynput."""
+    if k is None:
+        return None
+
+    try:
+        from pynput.keyboard import Key, KeyCode
+        if isinstance(k, Key):
+            if k in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
+                return Key.ctrl
+            if k in (Key.alt, Key.alt_l, Key.alt_r, Key.alt_gr):
+                return Key.alt
+            if k in (Key.shift, Key.shift_l, Key.shift_r):
+                return Key.shift
+            if k in (Key.cmd, Key.cmd_l, Key.cmd_r):
+                return Key.cmd
+            return k
+
+        if isinstance(k, KeyCode):
+            if k.char:
+                val = ord(k.char)
+                # In Linux X11/XWayland, Ctrl+Letter produces ASCII control codes (1-26)
+                if 1 <= val <= 26:
+                    return chr(val + 96)
+                return k.char.lower()
+            if k.vk:
+                return f"vk_{k.vk}"
+    except Exception:
+        pass
+
+    return None
+
+
+def parse_hotkey_combination(binding: str) -> set[object]:
+    """Parse a shortcut binding string (e.g. '<Control>m', '<Control><Alt>m') into a set of canonical keys."""
+    try:
+        from pynput.keyboard import Key
+    except ImportError:
+        return set()
+
+    target_keys: set[object] = set()
+    b = binding.lower()
+
+    if "ctrl" in b or "control" in b or "primary" in b:
+        target_keys.add(Key.ctrl)
+    if "alt" in b or "meta" in b:
+        target_keys.add(Key.alt)
+    if "shift" in b:
+        target_keys.add(Key.shift)
+    if "super" in b or "win" in b or "mod4" in b or "cmd" in b:
+        target_keys.add(Key.cmd)
+
+    main_key = re.sub(r"<[a-z0-9_]+>", "", b).strip("+-_ ")
+    if main_key:
+        if main_key == "space":
+            target_keys.add(Key.space)
+        elif main_key in ("return", "enter"):
+            target_keys.add(Key.enter)
+        elif main_key == "tab":
+            target_keys.add(Key.tab)
+        elif main_key == "escape":
+            target_keys.add(Key.esc)
+        elif len(main_key) == 1:
+            target_keys.add(main_key.lower())
+
+    return target_keys
+
+
+def _get_target_ecodes_groups(binding: str) -> list[set[int]]:
+    """Parse shortcut binding into groups of Linux evdev scancodes."""
+    try:
+        from evdev import ecodes
+    except ImportError:
+        return []
+
+    b = binding.lower()
+    groups: list[set[int]] = []
+
+    if "ctrl" in b or "control" in b or "primary" in b:
+        groups.append({ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL})
+    if "alt" in b or "meta" in b:
+        groups.append({ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT})
+    if "shift" in b:
+        groups.append({ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT})
+    if "super" in b or "win" in b or "cmd" in b:
+        groups.append({ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA})
+
+    main_key = re.sub(r"<[a-z0-9_]+>", "", b).strip("+-_ ")
+    if main_key:
+        if main_key == "space":
+            groups.append({ecodes.KEY_SPACE})
+        elif main_key in ("return", "enter"):
+            groups.append({ecodes.KEY_ENTER})
+        elif main_key == "tab":
+            groups.append({ecodes.KEY_TAB})
+        elif main_key == "escape":
+            groups.append({ecodes.KEY_ESC})
+        elif len(main_key) == 1:
+            code_name = f"KEY_{main_key.upper()}"
+            if hasattr(ecodes, code_name):
+                groups.append({getattr(ecodes, code_name)})
+
+    return groups
+
+
+class GlobalKeyHoldListener:
+    """Dual-layer global key-hold listener utilizing native Linux evdev with pynput fallback."""
+
+    def __init__(
+        self,
+        binding: str = "<Control>m",
+        on_hold_start: Optional[Callable[[], None]] = None,
+        on_hold_stop: Optional[Callable[[], None]] = None,
+    ):
+        self.binding = binding
+        self.on_hold_start = on_hold_start
+        self.on_hold_stop = on_hold_stop
+
+        self._pynput_target_keys = parse_hotkey_combination(binding)
+        self._evdev_target_groups = _get_target_ecodes_groups(binding)
+
+        self._current_pressed_pynput: set[object] = set()
+        self._current_pressed_ecodes: set[int] = set()
+
+        self._is_holding = False
+        self._pynput_listener = None
+        self._evdev_thread = None
+        self._running = False
+        self._lock = threading.RLock()
+
+    @property
+    def is_holding(self) -> bool:
+        return self._is_holding
+
+    def start(self) -> None:
+        """Start hardware evdev listener and pynput listener in background."""
+        if self._running:
+            return
+
+        self._running = True
+
+        # 1. Start evdev hardware kernel listener
+        self._start_evdev_listener()
+
+        # 2. Start pynput fallback listener
+        self._start_pynput_listener()
+
+        logger.info(f"Global key-hold listener active for '{self.binding}' (evdev + pynput active)")
+
+    def stop(self) -> None:
+        """Stop all listeners."""
+        self._running = False
+        if self._pynput_listener is not None:
+            try:
+                self._pynput_listener.stop()
+            except Exception:
+                pass
+            self._pynput_listener = None
+
+    def _trigger_hold_start(self) -> None:
+        """Trigger hold start safely without blocking key listener thread."""
+        with self._lock:
+            if not self._is_holding:
+                self._is_holding = True
+                should_call = True
+            else:
+                should_call = False
+
+        if should_call:
+            logger.info(f"🎯 Hold detected for '{self.binding}'. Starting stream...")
+            if self.on_hold_start:
+                try:
+                    threading.Thread(target=self.on_hold_start, daemon=True).start()
+                except Exception as e:
+                    logger.error(f"Error in on_hold_start: {e}")
+
+    def _trigger_hold_stop(self) -> None:
+        """Trigger hold stop safely without blocking key listener thread."""
+        with self._lock:
+            if self._is_holding:
+                self._is_holding = False
+                should_call = True
+            else:
+                should_call = False
+
+        if should_call:
+            logger.info(f"🛑 Release detected for '{self.binding}'. Stopping stream...")
+            if self.on_hold_stop:
+                try:
+                    threading.Thread(target=self.on_hold_stop, daemon=True).start()
+                except Exception as e:
+                    logger.error(f"Error in on_hold_stop: {e}")
+
+    # =========================================================================
+    # 1. Native Evdev Kernel Hardware Listener
+    # =========================================================================
+    def _start_evdev_listener(self) -> None:
+        if not self._evdev_target_groups:
+            return
+
+        def _evdev_loop():
+            import select
+            try:
+                import evdev
+                from evdev import ecodes
+            except ImportError:
+                return
+
+            keyboards = []
+            try:
+                for path in evdev.list_devices():
+                    try:
+                        d = evdev.InputDevice(path)
+                        caps = d.capabilities()
+                        if ecodes.EV_KEY in caps:
+                            klist = caps[ecodes.EV_KEY]
+                            if ecodes.KEY_A in klist and ecodes.KEY_SPACE in klist and "spic virtual" not in d.name.lower():
+                                keyboards.append(d)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"Evdev device enumeration notice: {e}")
+
+            if not keyboards:
+                return
+
+            logger.info(f"Evdev listening on {len(keyboards)} hardware keyboard device(s)")
+
+            while self._running:
+                try:
+                    r, _, _ = select.select(keyboards, [], [], 0.5)
+                    for dev in r:
+                        for event in dev.read():
+                            if event.type == ecodes.EV_KEY:
+                                code = event.code
+                                val = event.value  # 0: release, 1: press, 2: hold/repeat
+
+                                with self._lock:
+                                    if val in (1, 2):
+                                        self._current_pressed_ecodes.add(code)
+                                    elif val == 0:
+                                        self._current_pressed_ecodes.discard(code)
+
+                                    # Check if all target groups have at least one active key
+                                    is_match = all(
+                                        any(k in self._current_pressed_ecodes for k in grp)
+                                        for grp in self._evdev_target_groups
+                                    )
+
+                                if is_match:
+                                    self._trigger_hold_start()
+                                elif self._is_holding and not is_match:
+                                    self._trigger_hold_stop()
+
+                except Exception as e:
+                    if self._running:
+                        time.sleep(0.5)
+
+        self._evdev_thread = threading.Thread(target=_evdev_loop, daemon=True)
+        self._evdev_thread.start()
+
+    # =========================================================================
+    # 2. Pynput Fallback Listener
+    # =========================================================================
+    def _start_pynput_listener(self) -> None:
+        try:
+            import pynput
+            self._pynput_listener = pynput.keyboard.Listener(
+                on_press=self._on_pynput_press,
+                on_release=self._on_pynput_release,
+            )
+            self._pynput_listener.daemon = True
+            self._pynput_listener.start()
+        except Exception as e:
+            logger.debug(f"Pynput listener notice: {e}")
+
+    def _on_pynput_press(self, key) -> None:
+        norm = _normalize_pynput_key(key)
+        if norm is None:
+            return
+
+        with self._lock:
+            self._current_pressed_pynput.add(norm)
+            is_match = self._pynput_target_keys and self._pynput_target_keys.issubset(self._current_pressed_pynput)
+
+        if is_match:
+            self._trigger_hold_start()
+
+    def _on_pynput_release(self, key) -> None:
+        norm = _normalize_pynput_key(key)
+        if norm is None:
+            return
+
+        with self._lock:
+            self._current_pressed_pynput.discard(norm)
+            is_match = self._pynput_target_keys and self._pynput_target_keys.issubset(self._current_pressed_pynput)
+
+        if self._is_holding and not is_match:
+            self._trigger_hold_stop()

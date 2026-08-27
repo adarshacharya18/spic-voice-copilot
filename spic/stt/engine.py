@@ -45,7 +45,12 @@ class STTEngine:
             logger.info(f"Model loaded in {time.time() - start_t:.2f}s (threads={threads}).")
         return self._model
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        initial_prompt: Optional[str] = None,
+    ) -> str:
         """Transcribe a 16kHz float32 audio array to text."""
         if audio.size == 0:
             return ""
@@ -65,6 +70,7 @@ class STTEngine:
             audio,
             beam_size=1,  # Greedy search for fastest CPU response
             language=self.config.language,
+            initial_prompt=initial_prompt,
             condition_on_previous_text=False,
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=400),

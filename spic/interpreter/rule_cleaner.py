@@ -37,7 +37,7 @@ class RuleCleaner:
         r"(.*?)\b(delete this sentence|delete this statement|delete the last sentence)\b",
     ]
 
-    def clean(self, text: str) -> str:
+    def clean(self, text: str, strip_trailing_period: bool = True) -> str:
         """Apply full rule-based cleaning, self-corrections, and inline command execution."""
         if not text:
             return ""
@@ -70,7 +70,11 @@ class RuleCleaner:
         # 6. Fix sentence capitalization
         result = self._capitalize_sentences(result.strip())
 
-        return result
+        # 7. Strip automatic trailing full stops at the end
+        if strip_trailing_period:
+            result = result.rstrip(".")
+
+        return result.strip()
 
     def _process_inline_deletions(self, text: str) -> str:
         """Execute inline 'scratch that' or 'delete that' commands."""

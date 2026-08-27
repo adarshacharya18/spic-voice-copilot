@@ -90,6 +90,21 @@ class UIConfig(BaseModel):
     hud_height: int = Field(default=46, description="Height of floating HUD window in pixels")
 
 
+class StreamConfig(BaseModel):
+    chunk_pause_threshold_seconds: float = Field(
+        default=0.45,
+        description="Pause/silence duration in seconds to trigger an on-the-go stream chunk transcription"
+    )
+    max_chunk_duration_seconds: float = Field(
+        default=8.0,
+        description="Maximum duration of a single speech chunk before forcing slice transcription"
+    )
+    smart_spacing: bool = Field(
+        default=True,
+        description="Automatically manage space and punctuation transitions between sequential stream chunks"
+    )
+
+
 class ShortcutsConfig(BaseModel):
     fast_dictation: str = Field(
         default="<Control><Alt>space",
@@ -99,6 +114,10 @@ class ShortcutsConfig(BaseModel):
         default="<Control><Super>space",
         description="Global hotkey for Smart Voice Copilot (e.g. <Control><Super>space, <Control><Shift>space)"
     )
+    hold_stream_dictation: str = Field(
+        default="<Super><Alt>n",
+        description="Global hotkey to hold for continuous On-the-GO Stream Dictation (e.g. <Super><Alt>n, <Control><Alt>m)"
+    )
 
 
 class SpicConfig(BaseModel):
@@ -107,6 +126,7 @@ class SpicConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    stream: StreamConfig = Field(default_factory=StreamConfig)
     shortcuts: ShortcutsConfig = Field(default_factory=ShortcutsConfig)
 
 
