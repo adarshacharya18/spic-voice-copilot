@@ -456,6 +456,59 @@ def cmd_test_stream(args) -> None:
         worker.stop(wait=True)
 
 
+def cmd_memory(args) -> None:
+    """Manage cross-agent persistent memory."""
+    from spic.memory import AgentMemoryCoordinator, MemoryType, MemoryQuery
+
+    coord = AgentMemoryCoordinator()
+
+    if args.add:
+        mem_type = MemoryType(args.type) if args.type else MemoryType.SEMANTIC
+        ns = args.namespace or ("user_profile" if mem_type == MemoryType.SEMANTIC else "general")
+        mem = coord.remember_fact(
+            content=args.add,
+            agent_id=args.agent or "global",
+            namespace=ns,
+            key=args.key,
+            importance=args.importance,
+        )
+        print(f"✅ Stored {mem_type.value} memory (ID: {mem.id}) in namespace '{ns}':")
+        print(f"   \"{mem.content}\"")
+
+    elif args.search:
+        results = coord.store.search(MemoryQuery(
+            query=args.search,
+            agent_id=args.agent,
+            limit=args.limit or 5,
+        ))
+        print(f"\n🔍 Memory Search Results for '{args.search}' ({len(results)} found):")
+        print("=" * 60)
+        for i, res in enumerate(results, 1):
+            mem = res.memory
+            print(f"[{i}] Score: {res.score:.2f} | Type: {mem.memory_type.value} | Namespace: {mem.namespace}")
+            print(f"    Content: \"{mem.content}\"")
+            if mem.metadata:
+                print(f"    Metadata: {mem.metadata}")
+            print("-" * 60)
+        print()
+
+    elif args.prune:
+        count = coord.decay_engine.decay_and_prune()
+        print(f"🧹 Pruned and archived {count} stale memory items.")
+
+    else:
+        # Default: list memories
+        items = coord.store.list_all(agent_id=args.agent, limit=args.limit or 20)
+        print(f"\n🧠 Stored Agent Memories ({len(items)} items):")
+        print("=" * 60)
+        for i, mem in enumerate(items, 1):
+            print(f"[{i}] ID: {mem.id[:8]}... | Type: {mem.memory_type.value:<10} | Namespace: {mem.namespace:<14} | Agent: {mem.agent_id}")
+            print(f"    \"{mem.content}\"")
+            print(f"    Accessed: {mem.last_accessed_at.strftime('%Y-%m-%d %H:%M')} (Count: {mem.access_count}) | Importance: {mem.importance}")
+            print("-" * 60)
+        print()
+
+
 def cmd_config(args) -> None:
     """Display current config."""
     config = load_config()
@@ -486,6 +539,19 @@ def main() -> None:
     p_tstream = subparsers.add_parser("test-stream", help="Test continuous on-the-go stream dictation live")
     p_tstream.add_argument("--duration", type=int, default=10, help="Test stream duration in seconds (default: 10)")
     p_tstream.set_defaults(func=cmd_test_stream)
+
+    # memory
+    p_mem = subparsers.add_parser("memory", help="Manage cross-agent persistent memory (CoALA framework)")
+    p_mem.add_argument("--add", type=str, default=None, help="Add a new memory fact")
+    p_mem.add_argument("--search", type=str, default=None, help="Search memories by query")
+    p_mem.add_argument("--type", type=str, choices=["semantic", "episodic", "procedural", "working"], default="semantic", help="Memory type")
+    p_mem.add_argument("--namespace", type=str, default=None, help="Memory namespace")
+    p_mem.add_argument("--key", type=str, default=None, help="Optional unique key for superseding")
+    p_mem.add_argument("--agent", type=str, default=None, help="Agent ID (default: global)")
+    p_mem.add_argument("--importance", type=float, default=0.7, help="Importance weight (0.0 - 1.0)")
+    p_mem.add_argument("--limit", type=int, default=20, help="Max results to display")
+    p_mem.add_argument("--prune", action="store_true", help="Prune and archive stale low-utility memories")
+    p_mem.set_defaults(func=cmd_memory)
 
     # test-mic
     p_mic = subparsers.add_parser("test-mic", help="Test microphone capture & volume")

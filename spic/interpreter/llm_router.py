@@ -10,16 +10,18 @@ import requests
 
 from spic.config import LLMConfig
 from spic.interpreter.rule_cleaner import RuleCleaner
+from spic.memory import AgentMemoryCoordinator
 
 logger = logging.getLogger("spic.interpreter.llm")
 
 
 class LLMRouter:
-    """Routes voice transcriptions through local Ollama or Cloud LLM APIs."""
+    """Routes voice transcriptions through local Ollama or Cloud LLM APIs with cognitive memory augmentation."""
 
-    def __init__(self, config: LLMConfig):
+    def __init__(self, config: LLMConfig, memory: Optional[AgentMemoryCoordinator] = None):
         self.config = config
         self.rule_cleaner = RuleCleaner()
+        self.memory = memory or AgentMemoryCoordinator()
 
     def process(self, raw_text: str, force_smart_mode: Optional[bool] = None) -> str:
         """Process transcription. If smart mode is disabled, uses rule cleaner."""
