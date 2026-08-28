@@ -245,9 +245,13 @@ def _normalize_pynput_key(k: object) -> Optional[object]:
     try:
         from pynput.keyboard import Key, KeyCode
         if isinstance(k, Key):
-            if k in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
+            if k in (Key.alt_r, Key.alt_gr):
+                return Key.alt_r
+            if k == Key.ctrl_r:
+                return Key.ctrl_r
+            if k in (Key.ctrl, Key.ctrl_l):
                 return Key.ctrl
-            if k in (Key.alt, Key.alt_l, Key.alt_r, Key.alt_gr):
+            if k in (Key.alt, Key.alt_l):
                 return Key.alt
             if k in (Key.shift, Key.shift_l, Key.shift_r):
                 return Key.shift
@@ -271,7 +275,7 @@ def _normalize_pynput_key(k: object) -> Optional[object]:
 
 
 def parse_hotkey_combination(binding: str) -> set[object]:
-    """Parse a shortcut binding string (e.g. '<Control>m', '<Control><Alt>m') into a set of canonical keys."""
+    """Parse a shortcut binding string (e.g. '<RightAlt>', '<Control>m', '<CapsLock>', '<F8>') into a set of canonical keys."""
     try:
         from pynput.keyboard import Key
     except ImportError:
@@ -280,14 +284,35 @@ def parse_hotkey_combination(binding: str) -> set[object]:
     target_keys: set[object] = set()
     b = binding.lower()
 
-    if "ctrl" in b or "control" in b or "primary" in b:
-        target_keys.add(Key.ctrl)
-    if "alt" in b or "meta" in b:
+    if "rightalt" in b or "alt_r" in b or "altgr" in b or "right_alt" in b:
+        target_keys.add(Key.alt_r)
+    elif "alt" in b or "meta" in b:
         target_keys.add(Key.alt)
-    if "shift" in b:
+
+    if "rightctrl" in b or "ctrl_r" in b or "right_ctrl" in b or "rightcontrol" in b:
+        target_keys.add(Key.ctrl_r)
+    elif "ctrl" in b or "control" in b or "primary" in b:
+        target_keys.add(Key.ctrl)
+
+    if "rightshift" in b or "shift_r" in b or "right_shift" in b:
+        target_keys.add(Key.shift_r)
+    elif "shift" in b:
         target_keys.add(Key.shift)
+
     if "super" in b or "win" in b or "mod4" in b or "cmd" in b:
         target_keys.add(Key.cmd)
+    if "caps" in b or "capslock" in b or "caps_lock" in b:
+        target_keys.add(Key.caps_lock)
+    if "scroll" in b or "scrolllock" in b:
+        target_keys.add(Key.scroll_lock)
+    if "pause" in b:
+        target_keys.add(Key.pause)
+
+    # Check function keys (f1 - f12)
+    for fn in range(1, 13):
+        if f"<f{fn}>" in b or f"f{fn}" == b.strip("<> "):
+            if hasattr(Key, f"f{fn}"):
+                target_keys.add(getattr(Key, f"f{fn}"))
 
     main_key = re.sub(r"<[a-z0-9_]+>", "", b).strip("+-_ ")
     if main_key:
@@ -315,14 +340,42 @@ def _get_target_ecodes_groups(binding: str) -> list[set[int]]:
     b = binding.lower()
     groups: list[set[int]] = []
 
-    if "ctrl" in b or "control" in b or "primary" in b:
-        groups.append({ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL})
-    if "alt" in b or "meta" in b:
+    if "rightalt" in b or "alt_r" in b or "altgr" in b or "right_alt" in b:
+        groups.append({ecodes.KEY_RIGHTALT})
+    elif "leftalt" in b or "alt_l" in b or "left_alt" in b:
+        groups.append({ecodes.KEY_LEFTALT})
+    elif "alt" in b or "meta" in b:
         groups.append({ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT})
-    if "shift" in b:
+
+    if "rightctrl" in b or "ctrl_r" in b or "right_ctrl" in b or "rightcontrol" in b:
+        groups.append({ecodes.KEY_RIGHTCTRL})
+    elif "leftctrl" in b or "ctrl_l" in b or "left_ctrl" in b or "leftcontrol" in b:
+        groups.append({ecodes.KEY_LEFTCTRL})
+    elif "ctrl" in b or "control" in b or "primary" in b:
+        groups.append({ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL})
+
+    if "rightshift" in b or "shift_r" in b or "right_shift" in b:
+        groups.append({ecodes.KEY_RIGHTSHIFT})
+    elif "leftshift" in b or "shift_l" in b or "left_shift" in b:
+        groups.append({ecodes.KEY_LEFTSHIFT})
+    elif "shift" in b:
         groups.append({ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT})
+
     if "super" in b or "win" in b or "cmd" in b:
         groups.append({ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA})
+    if "caps" in b or "capslock" in b or "caps_lock" in b:
+        groups.append({ecodes.KEY_CAPSLOCK})
+    if "scroll" in b or "scrolllock" in b:
+        groups.append({ecodes.KEY_SCROLLLOCK})
+    if "pause" in b:
+        groups.append({ecodes.KEY_PAUSE})
+
+    # Check function keys (f1 - f12)
+    for fn in range(1, 13):
+        if f"<f{fn}>" in b or f"f{fn}" == b.strip("<> "):
+            code_name = f"KEY_F{fn}"
+            if hasattr(ecodes, code_name):
+                groups.append({getattr(ecodes, code_name)})
 
     main_key = re.sub(r"<[a-z0-9_]+>", "", b).strip("+-_ ")
     if main_key:
@@ -347,13 +400,15 @@ class GlobalKeyHoldListener:
 
     def __init__(
         self,
-        binding: str = "<Control>m",
+        binding: str = "<RightControl>",
         on_hold_start: Optional[Callable[[], None]] = None,
         on_hold_stop: Optional[Callable[[], None]] = None,
+        hold_delay_ms: int = 500,
     ):
         self.binding = binding
         self.on_hold_start = on_hold_start
         self.on_hold_stop = on_hold_stop
+        self.hold_delay_seconds = max(0.0, hold_delay_ms / 1000.0)
 
         self._pynput_target_keys = parse_hotkey_combination(binding)
         self._evdev_target_groups = _get_target_ecodes_groups(binding)
@@ -362,17 +417,20 @@ class GlobalKeyHoldListener:
         self._current_pressed_ecodes: set[int] = set()
 
         self._is_holding = False
+        self._evdev_active = False
         self._pynput_listener = None
         self._evdev_thread = None
+        self._pending_timer: Optional[threading.Timer] = None
         self._running = False
         self._lock = threading.RLock()
+        self._last_state_change_time = 0.0
 
     @property
     def is_holding(self) -> bool:
         return self._is_holding
 
     def start(self) -> None:
-        """Start hardware evdev listener and pynput listener in background."""
+        """Start hardware evdev listener and pynput fallback listener in background."""
         if self._running:
             return
 
@@ -384,11 +442,20 @@ class GlobalKeyHoldListener:
         # 2. Start pynput fallback listener
         self._start_pynput_listener()
 
-        logger.info(f"Global key-hold listener active for '{self.binding}' (evdev + pynput active)")
+        logger.info(f"Global key-hold listener active for '{self.binding}' (hold delay: {int(self.hold_delay_seconds*1000)}ms)")
 
     def stop(self) -> None:
         """Stop all listeners."""
         self._running = False
+        self._evdev_active = False
+        with self._lock:
+            if self._pending_timer is not None:
+                try:
+                    self._pending_timer.cancel()
+                except Exception:
+                    pass
+                self._pending_timer = None
+
         if self._pynput_listener is not None:
             try:
                 self._pynput_listener.stop()
@@ -396,17 +463,52 @@ class GlobalKeyHoldListener:
                 pass
             self._pynput_listener = None
 
+    def _on_key_match_start(self) -> None:
+        """Called when key combination is pressed. Starts the hold delay timer."""
+        with self._lock:
+            if self._is_holding or self._pending_timer is not None:
+                return
+
+            if self.hold_delay_seconds <= 0.0:
+                self._trigger_hold_start()
+                return
+
+            self._pending_timer = threading.Timer(self.hold_delay_seconds, self._on_timer_fired)
+            self._pending_timer.daemon = True
+            self._pending_timer.start()
+
+    def _on_key_match_stop(self) -> None:
+        """Called when key combination is released. Cancels pending timer or stops active hold."""
+        with self._lock:
+            if self._pending_timer is not None:
+                try:
+                    self._pending_timer.cancel()
+                except Exception:
+                    pass
+                self._pending_timer = None
+
+            if self._is_holding:
+                self._trigger_hold_stop()
+
+    def _on_timer_fired(self) -> None:
+        """Timer callback when key was held past hold_delay_seconds threshold."""
+        with self._lock:
+            self._pending_timer = None
+        self._trigger_hold_start()
+
     def _trigger_hold_start(self) -> None:
         """Trigger hold start safely without blocking key listener thread."""
         with self._lock:
+            now = time.time()
             if not self._is_holding:
                 self._is_holding = True
+                self._last_state_change_time = now
                 should_call = True
             else:
                 should_call = False
 
         if should_call:
-            logger.info(f"🎯 Hold detected for '{self.binding}'. Starting stream...")
+            logger.info(f"🎯 Hold confirmed for '{self.binding}' (>{int(self.hold_delay_seconds*1000)}ms). Starting stream...")
             if self.on_hold_start:
                 try:
                     threading.Thread(target=self.on_hold_start, daemon=True).start()
@@ -416,8 +518,10 @@ class GlobalKeyHoldListener:
     def _trigger_hold_stop(self) -> None:
         """Trigger hold stop safely without blocking key listener thread."""
         with self._lock:
+            now = time.time()
             if self._is_holding:
                 self._is_holding = False
+                self._last_state_change_time = now
                 should_call = True
             else:
                 should_call = False
@@ -471,6 +575,7 @@ class GlobalKeyHoldListener:
             last_scan_time = time.time()
 
             if keyboards:
+                self._evdev_active = True
                 logger.info(f"Evdev listening on {len(keyboards)} hardware keyboard device(s)")
 
             while self._running:
@@ -484,8 +589,11 @@ class GlobalKeyHoldListener:
                             if nd.path not in active_paths:
                                 keyboards.append(nd)
                         last_scan_time = now
+                        if keyboards:
+                            self._evdev_active = True
 
                     if not keyboards:
+                        self._evdev_active = False
                         time.sleep(0.5)
                         continue
 
@@ -512,9 +620,9 @@ class GlobalKeyHoldListener:
                                         )
 
                                     if is_match:
-                                        self._trigger_hold_start()
-                                    elif self._is_holding and not is_match:
-                                        self._trigger_hold_stop()
+                                        self._on_key_match_start()
+                                    else:
+                                        self._on_key_match_stop()
                         except (OSError, IOError) as err:
                             logger.debug(f"Evdev device disconnected ({dev.path}): {err}")
                             dead_devices.append(dev)
@@ -551,6 +659,9 @@ class GlobalKeyHoldListener:
             logger.debug(f"Pynput listener notice: {e}")
 
     def _on_pynput_press(self, key) -> None:
+        if self._evdev_active:
+            return
+
         norm = _normalize_pynput_key(key)
         if norm is None:
             return
@@ -560,9 +671,12 @@ class GlobalKeyHoldListener:
             is_match = self._pynput_target_keys and self._pynput_target_keys.issubset(self._current_pressed_pynput)
 
         if is_match:
-            self._trigger_hold_start()
+            self._on_key_match_start()
 
     def _on_pynput_release(self, key) -> None:
+        if self._evdev_active:
+            return
+
         norm = _normalize_pynput_key(key)
         if norm is None:
             return
@@ -571,5 +685,5 @@ class GlobalKeyHoldListener:
             self._current_pressed_pynput.discard(norm)
             is_match = self._pynput_target_keys and self._pynput_target_keys.issubset(self._current_pressed_pynput)
 
-        if self._is_holding and not is_match:
-            self._trigger_hold_stop()
+        if not is_match:
+            self._on_key_match_stop()

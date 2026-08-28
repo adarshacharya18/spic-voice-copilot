@@ -115,8 +115,12 @@ class ShortcutsConfig(BaseModel):
         description="Global hotkey for Smart Voice Copilot (e.g. <Control><Super>space, <Control><Shift>space)"
     )
     hold_stream_dictation: str = Field(
-        default="<Super><Alt>n",
-        description="Global hotkey to hold for continuous On-the-GO Stream Dictation (e.g. <Super><Alt>n, <Control><Alt>m)"
+        default="<RightControl>",
+        description="Global hotkey to hold for continuous On-the-GO Stream Dictation (e.g. <RightControl>, <F8>, <RightAlt>)"
+    )
+    hold_trigger_delay_ms: int = Field(
+        default=500,
+        description="Minimum duration in milliseconds to hold key before activating stream dictation"
     )
 
 

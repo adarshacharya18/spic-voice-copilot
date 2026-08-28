@@ -10,7 +10,7 @@
 [![Local AI](https://img.shields.io/badge/AI-100%25%20Local%20%26%20Private-brightgreen.svg)](https://ollama.com)
 
 **Speak anywhere. Type everywhere.**  
-Spic is a lightweight background daemon that brings an Apple Intelligence / Wispr Flow voice experience natively to Linux desktops with zero cloud dependencies, instant voice self-corrections, and kernel-level hardware typing.
+Spic is a lightweight background daemon that brings a fluid, continuous voice experience natively to Linux desktops with zero cloud dependencies, on-the-go stream dictation, cognitive multi-agent memory, and kernel-level hardware typing.
 
 ---
 
@@ -18,13 +18,15 @@ Spic is a lightweight background daemon that brings an Apple Intelligence / Wisp
 
 ## ✨ Key Features
 
+- 🚀 **On-the-GO Continuous Stream Dictation:** Hold hotkey to speak continuously. Natural pauses (450ms) are sliced, transcribed asynchronously, and typed live at your cursor with smart inter-chunk spacing.
+- ⏱️ **500ms Hold Intent Timer:** Accidental taps (<500ms) are completely ignored with zero mic or HUD flickering.
+- 🧠 **CoALA Multi-Agent Cognitive Memory:** 4-tier persistent memory (Semantic, Episodic, Procedural, Working) with SQLite + FTS5 full-text search, dynamic exponential temporal decay, and hybrid utility scoring.
 - 🔒 **100% Local & Private:** Runs completely on your machine via CPU-quantized Whisper (`faster-whisper` `int8`) and local Ollama SLMs (`llama3.2:3b`). Zero audio is sent over the internet.
-- ⚡ **Ultra-Low Latency (<300ms):** Fast dictation mode transcribes and types your speech in milliseconds.
-- 🪄 **Smart Voice Self-Corrections:** Correct yourself mid-sentence naturally (*"I was working till 8pm, no make it 9pm"*) — Spic automatically applies the correction and removes the mistake.
-- ⌨️ **Native Wayland & X11 Support:** Uses Linux Kernel `/dev/uinput` virtual hardware keyboards to bypass Wayland window isolation, allowing seamless typing in VS Code, Terminal, Chrome, Slack, Discord, and LibreOffice without window freezing.
-- 🎨 **Ambient Fluid Wave HUD:** Minimalist 60 FPS floating pill overlay with physics-based spring drop transitions, reactive harmonic voice ribbons, and zero distracting text.
-- 🌐 **Pluggable Cloud LLM Support:** Optional zero-latency cloud API support (Groq at 500+ tok/s, Google Gemini, OpenAI, Claude).
-- 🛡️ **Hardened Linux Security:** Enforces `0700`/`0600` config permissions, Unix domain socket peer credential verification (`SO_PEERCRED`), and ANSI escape sequence sanitization.
+- 🪄 **Few-Shot Conversational Self-Corrections:** Automatically replaces conversational corrections and phrase retries (*"select screenshot in the left drawer from the drawer"* $\to$ *"Select screenshot from the drawer"*).
+- ⌨️ **Native Wayland & X11 Support:** Uses Linux Kernel `/dev/uinput` virtual hardware keyboards to bypass Wayland window isolation, allowing seamless typing in VS Code, Terminal, Chrome, Slack, Discord, and LibreOffice.
+- 🎨 **Ambient Translucent Wave HUD:** Minimalist floating overlay with physics-based spring drop transitions, reactive harmonic voice ribbons, and zero distracting text.
+- 🌐 **Pluggable Cloud LLM Support:** Header-authenticated cloud API support (Groq at 500+ tok/s, Google Gemini, OpenAI, Claude, OpenRouter).
+- 🛡️ **Hardened Linux Security:** Enforces `0700`/`0600` file permissions, Unix domain socket peer credential verification (`SO_PEERCRED`), and ANSI escape sequence sanitization.
 
 ---
 
@@ -55,8 +57,8 @@ Spic is a lightweight background daemon that brings an Apple Intelligence / Wisp
 
 ### 1. Clone and Install
 ```bash
-git clone https://github.com/your-username/spic.git
-cd spic
+git clone https://github.com/adarshacharya18/spic-voice-copilot.git
+cd spic-voice-copilot
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -79,14 +81,13 @@ python3 -m spic.cli setup-shortcuts
 
 ---
 
-## ⌨️ Hotkeys & Custom Shortcut Management
+## ⌨️ Hotkeys & Dictation Modes
 
-Spic includes an **intelligent hotkey manager** that scans active GNOME keybindings on your machine to guide you to 100% free shortcuts and prevent accidental desktop conflicts:
-
-| Default Hotkey | Mode | Latency | Description |
+| Default Hotkey | Mode | Behavior | Description |
 |---|---|---|---|
-| **`Ctrl + Alt + Space`** | **Fast Dictation** | `<300ms` | Instant voice typing with verbal punctuation (*"period"*, *"comma"*, *"new line"*) and instant deletions (*"scratch that"*). |
-| **`Ctrl + Super + Space`** | **Smart Copilot** | `~2-3s` | Deep LLM interpretation using local `llama3.2:3b` or Cloud APIs. Formats bullet points, cleans grammar, and resolves complex self-corrections. |
+| **Hold `RightControl`** | **On-the-GO Stream** | `Live on Pauses` | Hold for >500ms to speak continuously. Audio is sliced on natural pauses and typed live at your cursor. |
+| **`Ctrl + Alt + Space`** | **Fast Dictation** | `<300ms` | Toggle voice typing with verbal punctuation (*"period"*, *"comma"*, *"new line"*) and instant deletions (*"scratch that"*). |
+| **`Ctrl + Super + Space`** | **Smart Copilot** | `~2-3s` | Deep LLM interpretation using local `llama3.2:3b` or Cloud APIs with few-shot conversational self-corrections. |
 
 ### Customize Your Shortcuts:
 ```bash
@@ -98,18 +99,31 @@ python3 -m spic.cli shortcuts --list-free
 
 # 3. Check if a specific shortcut has system conflicts
 python3 -m spic.cli shortcuts --check "ctrl+alt+m"
+```
 
-# 4. Directly assign custom shortcuts
-python3 -m spic.cli shortcuts --fast "ctrl+alt+m" --smart "ctrl+super+k"
+---
+
+## 🧠 Cognitive Memory CLI
+
+```bash
+# Store user preference or fact
+python3 -m spic.cli memory --add "I prefer PyTorch and Python for ML code" --type semantic --key "ml_pref" --importance 0.9
+
+# Search memory
+python3 -m spic.cli memory --search "machine learning preferences"
+
+# Prune old / stale memories
+python3 -m spic.cli memory --prune --max-age-days 90
 ```
 
 ---
 
 ## 🧪 CLI Diagnostics & Tools
 
-Spic comes with a comprehensive diagnostic suite:
-
 ```bash
+# Test continuous stream dictation pipeline
+python3 -m spic.cli test-stream
+
 # Test microphone levels via PipeWire
 python3 -m spic.cli test-mic
 
@@ -119,8 +133,8 @@ python3 -m spic.cli test-stt
 # Test self-correction & rule cleaner
 python3 -m spic.cli test-rules
 
-# Test smart LLM interpretation
-python3 -m spic.cli test-llm --input "I was working in the morning till 8pm. No make it 9pm."
+# Test smart LLM interpretation with few-shot prompt
+python3 -m spic.cli test-llm --input "select screenshot in the left drawer from the drawer"
 
 # Test hardware text injection into active window
 python3 -m spic.cli test-injection --text "✨ Spic Hardware Injection Working!"
@@ -145,15 +159,21 @@ Spic is configured via `~/.config/spic/config.json`:
     "model": "llama3.2:3b",
     "base_url": "http://localhost:11434"
   },
-  "ui": {
-    "show_hud": true,
-    "hud_width": 170,
-    "hud_height": 42
+  "stream": {
+    "chunk_pause_threshold_seconds": 0.45,
+    "max_chunk_duration_seconds": 8.0,
+    "smart_spacing": true
+  },
+  "shortcuts": {
+    "fast_dictation": "<Control><Alt>space",
+    "smart_copilot": "<Control><Super>space",
+    "hold_stream_dictation": "<RightControl>",
+    "hold_trigger_delay_ms": 500
   }
 }
 ```
 
-*For cloud providers (Groq, Gemini, OpenAI) and advanced settings, see the [Configuration Guide](docs/configuration.md).*
+*For complete configuration options, see the [Configuration Guide](docs/configuration.md).*
 
 ---
 
@@ -161,11 +181,12 @@ Spic is configured via `~/.config/spic/config.json`:
 
 ```mermaid
 flowchart LR
-    Mic["🎤 Microphone"] -->|PipeWire PCM| STT["Whisper Base int8"]
+    Mic["🎤 Microphone"] -->|PipeWire PCM| VAD["VAD Pause Slicer (450ms)"]
+    VAD --> STT["Whisper Base int8"]
     STT --> Router{"Interpreter Router"}
-    Router -->|Fast Mode| Rules["Deterministic Rule Cleaner"]
-    Router -->|Smart Mode| LLM["Ollama / Groq / Gemini"]
-    Rules --> Injector["Universal Injector"]
+    Router -->|Fast Stream| Spacing["Smart Inter-Chunk Spacing"]
+    Router -->|Smart Mode| LLM["Few-Shot LLM + CoALA Memory"]
+    Spacing --> Injector["Universal Injector"]
     LLM --> Injector
     Injector -->|Hardware Keystrokes| UInput["Kernel /dev/uinput Device"]
     UInput --> App["Focused Active Window"]
@@ -178,6 +199,7 @@ flowchart LR
 ## 📚 Documentation Index
 
 - [Technical Architecture & Design](docs/architecture.md)
+- [CoALA Cognitive Memory Architecture](docs/memory.md)
 - [Configuration Reference](docs/configuration.md)
 - [Troubleshooting & FAQ](docs/troubleshooting.md)
 - [Security Architecture & Threat Model](docs/security.md)

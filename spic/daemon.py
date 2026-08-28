@@ -75,6 +75,7 @@ class SpicDaemon:
             binding=self.config.shortcuts.hold_stream_dictation,
             on_hold_start=self.start_stream_dictation,
             on_hold_stop=self.stop_stream_dictation,
+            hold_delay_ms=self.config.shortcuts.hold_trigger_delay_ms,
         )
 
         self._running = False

@@ -20,6 +20,18 @@ class TestStreamDictation(unittest.TestCase):
         keys_ctrl_alt_space = parse_hotkey_combination("<Control><Alt>space")
         self.assertGreaterEqual(len(keys_ctrl_alt_space), 3)
 
+        keys_caps = parse_hotkey_combination("<CapsLock>")
+        self.assertEqual(len(keys_caps), 1)
+
+        keys_right_alt = parse_hotkey_combination("<RightAlt>")
+        self.assertEqual(len(keys_right_alt), 1)
+
+        keys_right_ctrl = parse_hotkey_combination("<RightControl>")
+        self.assertEqual(len(keys_right_ctrl), 1)
+
+        keys_f8 = parse_hotkey_combination("<F8>")
+        self.assertEqual(len(keys_f8), 1)
+
     def test_stream_worker_smart_spacing(self):
         """Verify smart spacing between sequential stream chunks."""
         injected_chunks = []
@@ -61,12 +73,46 @@ class TestStreamDictation(unittest.TestCase):
         # Chunk 3 (starts with comma, should NOT have prepended space)
         worker.enqueue_chunk(dummy_audio, is_final=True)
         time.sleep(0.2)
+        # Verify chunks were received and injected
+        self.assertGreaterEqual(len(injected_chunks), 2)
         worker.stop(wait=True)
 
         self.assertEqual(len(injected_chunks), 3)
         self.assertEqual(injected_chunks[0], "Hello world")
         self.assertEqual(injected_chunks[1], " This is a test")
         self.assertEqual(injected_chunks[2], ", and more text")
+
+    def test_hold_activation_timer(self):
+        """Verify that micro-taps are cancelled and intentional holds trigger on_hold_start."""
+        start_calls = []
+        stop_calls = []
+
+        listener = GlobalKeyHoldListener(
+            binding="<RightControl>",
+            on_hold_start=lambda: start_calls.append(1),
+            on_hold_stop=lambda: stop_calls.append(1),
+            hold_delay_ms=100,  # 100ms test delay
+        )
+
+        # 1. Simulate accidental quick tap (key down -> key up in 30ms)
+        listener._on_key_match_start()
+        time.sleep(0.03)
+        listener._on_key_match_stop()
+        time.sleep(0.12)
+
+        # Timer was cancelled, so 0 start calls
+        self.assertEqual(len(start_calls), 0)
+        self.assertEqual(len(stop_calls), 0)
+
+        # 2. Simulate intentional hold (key down -> hold 150ms -> key up)
+        listener._on_key_match_start()
+        time.sleep(0.15)
+        self.assertEqual(len(start_calls), 1)
+
+        listener._on_key_match_stop()
+        time.sleep(0.05)
+        self.assertEqual(len(stop_calls), 1)
+        listener.stop()
 
 
 if __name__ == "__main__":

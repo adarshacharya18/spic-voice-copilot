@@ -4,7 +4,7 @@ Spic stores its configuration in JSON format at:
 ```
 ~/.config/spic/config.json
 ```
-The configuration file is secured with strict `0600` file permissions (accessible only by your Linux user).
+The configuration file and directory are secured with strict `0600`/`0700` POSIX permissions (accessible only by your Linux user).
 
 ---
 
@@ -32,9 +32,9 @@ The configuration file is secured with strict `0600` file permissions (accessibl
     "model": "llama3.2:3b",
     "api_key": null,
     "base_url": "http://localhost:11434",
-    "temperature": 0.0,
+    "temperature": 0.05,
     "enable_smart_mode_default": false,
-    "system_prompt": "You are a voice-to-text dictation assistant embedded in the OS. Clean and format the spoken text into natural written English with proper capitalization and punctuation. CRITICAL: Never drop leading pronouns or words (such as 'I', 'We', 'They', 'He', 'She', 'The'). Keep numbers and times in standard numeric format."
+    "system_prompt": "You are a voice-to-text post-processor and conversational editor embedded in the OS. Clean and format spoken text into natural written English with proper capitalization and punctuation. Discard superseded phrases and apply conversational self-corrections."
   },
   "injection": {
     "method": "auto",
@@ -44,19 +44,47 @@ The configuration file is secured with strict `0600` file permissions (accessibl
   "ui": {
     "show_hud": true,
     "hud_theme": "red_waveform",
-    "hud_width": 170,
-    "hud_height": 42
+    "hud_width": 220,
+    "hud_height": 64
+  },
+  "stream": {
+    "chunk_pause_threshold_seconds": 0.45,
+    "max_chunk_duration_seconds": 8.0,
+    "smart_spacing": true
   },
   "shortcuts": {
     "fast_dictation": "<Control><Alt>space",
-    "smart_copilot": "<Control><Super>space"
+    "smart_copilot": "<Control><Super>space",
+    "hold_stream_dictation": "<RightControl>",
+    "hold_trigger_delay_ms": 500
   }
 }
 ```
 
 ---
 
-## 2. LLM Provider Configurations
+## 2. Stream Dictation Configuration (`stream`)
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `chunk_pause_threshold_seconds` | `float` | `0.45` | Silence duration in seconds required to trigger a live stream chunk slice. |
+| `max_chunk_duration_seconds` | `float` | `8.0` | Maximum speech duration before forcing a chunk transcription. |
+| `smart_spacing` | `bool` | `true` | Automatically formats spaces and transitions between sequential stream chunks. |
+
+---
+
+## 3. Shortcuts Configuration (`shortcuts`)
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `fast_dictation` | `string` | `"<Control><Alt>space"` | Hotkey for instant toggle voice dictation with rule cleaning. |
+| `smart_copilot` | `string` | `"<Control><Super>space"` | Hotkey for smart LLM voice copilot with self-corrections. |
+| `hold_stream_dictation` | `string` | `"<RightControl>"` | Hotkey to hold for continuous On-the-GO stream dictation. |
+| `hold_trigger_delay_ms` | `int` | `500` | Minimum hold duration in milliseconds before activating stream dictation (cancels accidental taps). |
+
+---
+
+## 4. LLM Provider Configurations
 
 ### A. Local Ollama (100% Offline & Private)
 
@@ -78,9 +106,22 @@ Configure `~/.config/spic/config.json`:
 
 ---
 
-### B. Groq Cloud (Ultra-Fast <250ms Inference)
+### B. Google Gemini REST API
 
-Set your environment variable or add your key directly into the configuration:
+Configure your API key (passed securely in HTTP headers via `x-goog-api-key`):
+```json
+{
+  "llm": {
+    "provider": "gemini",
+    "model": "gemini-2.0-flash",
+    "api_key": "AIza..."
+  }
+}
+```
+
+---
+
+### C. Groq Cloud (Ultra-Fast <250ms Inference)
 
 ```bash
 export GROQ_API_KEY="gsk_..."
@@ -99,80 +140,8 @@ Or in `config.json`:
 
 ---
 
-### C. Google Gemini
+### D. OpenAI / Anthropic Claude / OpenRouter
 
-```bash
-export GEMINI_API_KEY="AIzaSy..."
-```
-
-Or in `config.json`:
-```json
-{
-  "llm": {
-    "provider": "gemini",
-    "model": "gemini-2.0-flash",
-    "api_key": "AIzaSy..."
-  }
-}
-```
-
----
-
-### D. OpenAI / OpenRouter / Anthropic
-
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "api_key": "sk-..."
-  }
-}
-```
-
----
-
-## 3. STT Model Options (`stt.model_size`)
-
-| Model Size | RAM Usage | Speed (CPU) | Recommended For |
-|---|---|---|---|
-| `tiny.en` | ~200 MB | Ultra Fast (<150ms) | Low-spec laptops |
-| `base.en` (Default) | ~400 MB | Fast (~250ms) | General daily dictation |
-| `small.en` | ~1.0 GB | Moderate (~500ms) | High accuracy requirements |
-| `medium.en` | ~2.5 GB | Slower (~1.2s) | Technical & complex vocabulary |
-
----
-
-## 4. UI Customization (`ui`)
-
-- `hud_width`: Width of the floating pill (default: `170px`).
-- `hud_height`: Height of the floating pill (default: `42px`).
-- `show_hud`: Set to `false` to run in completely invisible headless mode.
-
----
-
-## 5. Hotkeys & Shortcut Management (`shortcuts`)
-
-Spic supports custom system-level shortcuts with built-in GNOME desktop conflict detection:
-
-| Field | Default Value | Description |
-|---|---|---|
-| `fast_dictation` | `<Control><Alt>space` | Global trigger for instant voice dictation (<300ms) |
-| `smart_copilot` | `<Control><Super>space` | Global trigger for smart LLM voice copilot |
-
-### Shortcut Management CLI Commands:
-
-```bash
-# 1. Interactive configuration wizard (recommends free keys & warns on conflicts)
-python3 -m spic.cli shortcuts
-
-# 2. List all verified free & unassigned hotkeys on your desktop
-python3 -m spic.cli shortcuts --list-free
-
-# 3. Check if a specific shortcut has desktop conflicts
-python3 -m spic.cli shortcuts --check "ctrl+alt+m"
-
-# 4. Set custom shortcuts directly
-python3 -m spic.cli shortcuts --fast "ctrl+alt+m" --smart "ctrl+super+k"
-```
-
+- **OpenAI:** `"provider": "openai"`, `"model": "gpt-4o-mini"`, `"api_key": "sk-..."`
+- **Anthropic:** `"provider": "anthropic"`, `"model": "claude-3-5-haiku-20241022"`, `"api_key": "sk-ant-..."`
+- **OpenRouter:** `"provider": "openrouter"`, `"model": "meta-llama/llama-3.3-70b-instruct"`

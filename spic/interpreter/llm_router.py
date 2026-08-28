@@ -69,29 +69,60 @@ class LLMRouter:
                 return val
         return None
 
-    def _call_ollama(self, text: str) -> str:
-        """Call local Ollama instance via HTTP API with few-shot formatting."""
-        # Pre-apply rule deletions & self-corrections
-        pre_cleaned = self.rule_cleaner.clean(text)
-        if not pre_cleaned:
-            return ""
+    FEW_SHOT_EXAMPLES = [
+        {"role": "user", "content": "in the left drawer from the drawer"},
+        {"role": "assistant", "content": "From the drawer."},
+        {"role": "user", "content": "I want to order pizza, actually sushi"},
+        {"role": "assistant", "content": "I want to order sushi."},
+        {"role": "user", "content": "please send the document to Alice scratch that send it to Bob"},
+        {"role": "assistant", "content": "Please send the document to Bob."},
+        {"role": "user", "content": "we should schedule the call for three PM, no make that four thirty PM"},
+        {"role": "assistant", "content": "We should schedule the call for 4:30 PM."},
+        {"role": "user", "content": "select screenshot in the left drawer from the drawer"},
+        {"role": "assistant", "content": "Select screenshot from the drawer."},
+    ]
 
-        url = f"{self.config.base_url.rstrip('/')}/api/chat"
-        system_instructions = (
-            "You are a voice-to-text dictation assistant embedded in the OS. "
-            "Clean and format the spoken text into natural written English with proper capitalization and punctuation. "
-            "CRITICAL RULES: "
-            "1. Never drop leading pronouns or subjects (such as 'I', 'We', 'They', 'He', 'She', 'The'). "
-            "2. Keep numbers and times in standard numeric format (e.g. '9 PM', '8:00 AM', '10 copies', '$50') without spelling digits as words. "
-            "Output ONLY the complete refined text without quotes or explanations."
+    def _build_messages(self, text: str) -> list[dict[str, str]]:
+        """Build structured few-shot message payload augmented with user memory context."""
+        system_content = (
+            "You are a voice-to-text post-processor and conversational editor embedded in the OS. "
+            "Your job is to transform raw spoken audio transcripts into clean, intended written text.\n\n"
+            "CRITICAL EDITING RULES:\n"
+            "1. Conversational Self-Corrections & Retries:\n"
+            "   Speakers often change their minds mid-sentence, restart a clause, or correct a word.\n"
+            "   Always identify what the speaker intended and discard superseded phrases.\n"
+            "   - 'in the left drawer from the drawer' -> 'From the drawer.'\n"
+            "   - 'meet on Friday, actually Monday' -> 'Meet on Monday.'\n"
+            "   - 'I want pizza, actually sushi' -> 'I want sushi.'\n"
+            "2. Inline Voice Edits:\n"
+            "   If the speaker says 'scratch that', 'delete that', 'never mind', remove the cancelled text.\n"
+            "   - 'send the report today scratch that send it tomorrow' -> 'Send the report tomorrow.'\n"
+            "3. Grammar & Formatting:\n"
+            "   - Strip filler words ('um', 'uh', 'you know').\n"
+            "   - Keep numbers, times, and dates in standard numeric format ('9:00 AM', '$50', '10 copies').\n"
+            "   - Never drop pronouns or subjects ('I', 'We', 'They', 'He', 'She').\n"
+            "4. Output Format:\n"
+            "   Output ONLY the final cleaned text without quotes or explanations."
         )
 
+        try:
+            mem_ctx = self.memory.prepare_agent_context(text, limit_per_type=2)
+            if mem_ctx.summary_prompt:
+                system_content += f"\n\nUSER MEMORY CONTEXT:\n{mem_ctx.summary_prompt}"
+        except Exception:
+            pass
+
+        messages = [{"role": "system", "content": system_content}]
+        messages.extend(self.FEW_SHOT_EXAMPLES)
+        messages.append({"role": "user", "content": text})
+        return messages
+
+    def _call_ollama(self, text: str) -> str:
+        """Call local Ollama instance via HTTP API with few-shot formatting."""
+        url = f"{self.config.base_url.rstrip('/')}/api/chat"
         payload = {
             "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_instructions},
-                {"role": "user", "content": f"Input: {pre_cleaned}\nOutput:"},
-            ],
+            "messages": self._build_messages(text),
             "stream": False,
             "options": {
                 "temperature": 0.05,
@@ -104,7 +135,7 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data.get("message", {}).get("content", "").strip()
-        return self._sanitize_llm_output(result, original_text=pre_cleaned)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _call_groq(self, text: str) -> str:
         """Call Groq Cloud API for ultra-fast inference."""
@@ -119,10 +150,7 @@ class LLMRouter:
         }
         payload = {
             "model": self.config.model if self.config.model != "qwen3:8b" else "llama-3.1-8b-instant",
-            "messages": [
-                {"role": "system", "content": self.config.system_prompt},
-                {"role": "user", "content": f"Clean transcription: \"{text}\""},
-            ],
+            "messages": self._build_messages(text),
             "temperature": self.config.temperature,
         }
 
@@ -130,7 +158,7 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data["choices"][0]["message"]["content"].strip()
-        return self._sanitize_llm_output(result)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _call_openai(self, text: str) -> str:
         """Call OpenAI API or custom OpenAI-compatible endpoint."""
@@ -146,10 +174,7 @@ class LLMRouter:
         }
         payload = {
             "model": self.config.model if self.config.model != "qwen3:8b" else "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": self.config.system_prompt},
-                {"role": "user", "content": f"Clean transcription: \"{text}\""},
-            ],
+            "messages": self._build_messages(text),
             "temperature": self.config.temperature,
         }
 
@@ -157,13 +182,17 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data["choices"][0]["message"]["content"].strip()
-        return self._sanitize_llm_output(result)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _call_anthropic(self, text: str) -> str:
         """Call Anthropic Claude API."""
         api_key = self._get_api_key(["ANTHROPIC_API_KEY", "SPIC_LLM_API_KEY"])
         if not api_key:
             raise ValueError("Anthropic API key not found. Set in config or export ANTHROPIC_API_KEY.")
+
+        messages = self._build_messages(text)
+        system_prompt = messages[0]["content"]
+        chat_turns = messages[1:]
 
         url = "https://api.anthropic.com/v1/messages"
         headers = {
@@ -173,8 +202,8 @@ class LLMRouter:
         }
         payload = {
             "model": self.config.model if self.config.model != "qwen3:8b" else "claude-3-5-haiku-20241022",
-            "system": self.config.system_prompt,
-            "messages": [{"role": "user", "content": f"Clean transcription: \"{text}\""}],
+            "system": system_prompt,
+            "messages": chat_turns,
             "max_tokens": 1024,
             "temperature": self.config.temperature,
         }
@@ -183,13 +212,21 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data["content"][0]["text"].strip()
-        return self._sanitize_llm_output(result)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _call_gemini(self, text: str) -> str:
         """Call Google Gemini API."""
         api_key = self._get_api_key(["GEMINI_API_KEY", "GOOGLE_API_KEY", "SPIC_LLM_API_KEY"])
         if not api_key:
             raise ValueError("Gemini API key not found. Set in config or export GEMINI_API_KEY.")
+
+        messages = self._build_messages(text)
+        system_prompt = messages[0]["content"]
+
+        contents = []
+        for m in messages[1:]:
+            role = "user" if m["role"] == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": m["content"]}]})
 
         model_name = self.config.model if self.config.model != "qwen3:8b" else "gemini-2.0-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
@@ -198,8 +235,8 @@ class LLMRouter:
             "x-goog-api-key": api_key,
         }
         payload = {
-            "system_instruction": {"parts": [{"text": self.config.system_prompt}]},
-            "contents": [{"parts": [{"text": f"Clean transcription: \"{text}\""}]}],
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": contents,
             "generationConfig": {"temperature": self.config.temperature},
         }
 
@@ -207,7 +244,7 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return self._sanitize_llm_output(result)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _call_openrouter(self, text: str) -> str:
         """Call OpenRouter API."""
@@ -224,10 +261,7 @@ class LLMRouter:
         }
         payload = {
             "model": self.config.model if self.config.model != "qwen3:8b" else "meta-llama/llama-3.3-70b-instruct",
-            "messages": [
-                {"role": "system", "content": self.config.system_prompt},
-                {"role": "user", "content": f"Clean transcription: \"{text}\""},
-            ],
+            "messages": self._build_messages(text),
             "temperature": self.config.temperature,
         }
 
@@ -235,7 +269,7 @@ class LLMRouter:
         resp.raise_for_status()
         data = resp.json()
         result = data["choices"][0]["message"]["content"].strip()
-        return self._sanitize_llm_output(result)
+        return self._sanitize_llm_output(result, original_text=text)
 
     def _sanitize_llm_output(self, text: str, original_text: Optional[str] = None) -> str:
         """Remove reasoning tokens, markdown code fences, prefixes, and guard pronouns."""
