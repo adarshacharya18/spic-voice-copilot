@@ -40,3 +40,18 @@ env/
 *.sock
 *.log
 .system_generated/
+
+# Secrets & Credentials
+.env
+.env.*
+*.pem
+*.key
+*.token
+
+# Local Databases & Agent Memory
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

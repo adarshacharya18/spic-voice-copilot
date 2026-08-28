@@ -86,6 +86,12 @@ class SQLiteMemoryStore:
             """)
             conn.commit()
 
+        try:
+            if self.db_path.exists():
+                os.chmod(self.db_path, 0o600)
+        except Exception:
+            pass
+
     def upsert(self, memory: MemoryItem) -> None:
         """Insert or update a memory item and update the FTS search index."""
         with self._lock, self._db_connection() as conn:

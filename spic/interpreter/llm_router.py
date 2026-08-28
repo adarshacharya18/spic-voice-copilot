@@ -192,8 +192,11 @@ class LLMRouter:
             raise ValueError("Gemini API key not found. Set in config or export GEMINI_API_KEY.")
 
         model_name = self.config.model if self.config.model != "qwen3:8b" else "gemini-2.0-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        headers = {"Content-Type": "application/json"}
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
         payload = {
             "system_instruction": {"parts": [{"text": self.config.system_prompt}]},
             "contents": [{"parts": [{"text": f"Clean transcription: \"{text}\""}]}],

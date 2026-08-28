@@ -6,6 +6,7 @@ import logging
 import re
 import subprocess
 import threading
+import time
 from typing import Callable, Optional
 
 logger = logging.getLogger("spic.shortcuts")
@@ -436,13 +437,12 @@ class GlobalKeyHoldListener:
         if not self._evdev_target_groups:
             return
 
-        def _evdev_loop():
-            import select
+        def _scan_keyboards():
             try:
                 import evdev
                 from evdev import ecodes
             except ImportError:
-                return
+                return []
 
             keyboards = []
             try:
@@ -457,38 +457,76 @@ class GlobalKeyHoldListener:
                     except Exception:
                         pass
             except Exception as e:
-                logger.debug(f"Evdev device enumeration notice: {e}")
+                logger.debug(f"Evdev enumeration notice: {e}")
+            return keyboards
 
-            if not keyboards:
+        def _evdev_loop():
+            import select
+            try:
+                from evdev import ecodes
+            except ImportError:
                 return
 
-            logger.info(f"Evdev listening on {len(keyboards)} hardware keyboard device(s)")
+            keyboards = _scan_keyboards()
+            last_scan_time = time.time()
+
+            if keyboards:
+                logger.info(f"Evdev listening on {len(keyboards)} hardware keyboard device(s)")
 
             while self._running:
                 try:
+                    now = time.time()
+                    # Periodically refresh keyboard devices every 4 seconds or when list is empty
+                    if not keyboards or (now - last_scan_time > 4.0):
+                        active_paths = {d.path for d in keyboards}
+                        new_devs = _scan_keyboards()
+                        for nd in new_devs:
+                            if nd.path not in active_paths:
+                                keyboards.append(nd)
+                        last_scan_time = now
+
+                    if not keyboards:
+                        time.sleep(0.5)
+                        continue
+
                     r, _, _ = select.select(keyboards, [], [], 0.5)
+                    dead_devices = []
+
                     for dev in r:
-                        for event in dev.read():
-                            if event.type == ecodes.EV_KEY:
-                                code = event.code
-                                val = event.value  # 0: release, 1: press, 2: hold/repeat
+                        try:
+                            for event in dev.read():
+                                if event.type == ecodes.EV_KEY:
+                                    code = event.code
+                                    val = event.value  # 0: release, 1: press, 2: hold/repeat
 
-                                with self._lock:
-                                    if val in (1, 2):
-                                        self._current_pressed_ecodes.add(code)
-                                    elif val == 0:
-                                        self._current_pressed_ecodes.discard(code)
+                                    with self._lock:
+                                        if val in (1, 2):
+                                            self._current_pressed_ecodes.add(code)
+                                        elif val == 0:
+                                            self._current_pressed_ecodes.discard(code)
 
-                                    # Check if all target groups have at least one active key
-                                    is_match = all(
-                                        any(k in self._current_pressed_ecodes for k in grp)
-                                        for grp in self._evdev_target_groups
-                                    )
+                                        # Check if all target groups have at least one active key
+                                        is_match = all(
+                                            any(k in self._current_pressed_ecodes for k in grp)
+                                            for grp in self._evdev_target_groups
+                                        )
 
-                                if is_match:
-                                    self._trigger_hold_start()
-                                elif self._is_holding and not is_match:
-                                    self._trigger_hold_stop()
+                                    if is_match:
+                                        self._trigger_hold_start()
+                                    elif self._is_holding and not is_match:
+                                        self._trigger_hold_stop()
+                        except (OSError, IOError) as err:
+                            logger.debug(f"Evdev device disconnected ({dev.path}): {err}")
+                            dead_devices.append(dev)
+
+                    if dead_devices:
+                        for d in dead_devices:
+                            try:
+                                d.close()
+                            except Exception:
+                                pass
+                            if d in keyboards:
+                                keyboards.remove(d)
 
                 except Exception as e:
                     if self._running:
