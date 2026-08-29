@@ -12,7 +12,9 @@ from typing import Optional
 
 from spic.config import SpicConfig, load_config
 from spic.audio.recorder import AudioRecorder
+from spic.audio.stream_recorder import StreamAudioRecorder
 from spic.stt.engine import STTEngine
+from spic.stt.stream_worker import StreamTranscriptionWorker
 from spic.interpreter.llm_router import LLMRouter
 from spic.injector.input_injector import InputInjector
 from spic.shortcuts import ActivityTerminationWatcher
@@ -25,7 +27,7 @@ SOCKET_FILE = DEFAULT_SOCKET_DIR / "daemon.sock"
 
 
 class SpicDaemon:
-    """Main Spic background service supporting Fast Dictation and Smart Voice Copilot."""
+    """Main Spic background service supporting Fast Stream Dictation and Smart Voice Copilot."""
 
     def __init__(self, config: Optional[SpicConfig] = None):
         self.config = config or load_config()
@@ -35,7 +37,31 @@ class SpicDaemon:
         self.interpreter = LLMRouter(self.config.llm)
         self.injector = InputInjector(self.config.injection)
 
-        # Standard audio recorder with dynamic VAD
+        # 1. On-the-GO Fast Stream Worker & Recorder (Fast Mode)
+        self.stream_worker = StreamTranscriptionWorker(
+            stt=self.stt,
+            injector=self.injector,
+            sample_rate=self.config.audio.sample_rate,
+            smart_spacing=self.config.stream.smart_spacing,
+            on_chunk_injected=self._on_stream_chunk_injected,
+            on_stream_finished=self._on_stream_finished,
+        )
+
+        self.stream_recorder = StreamAudioRecorder(
+            sample_rate=self.config.audio.sample_rate,
+            channels=self.config.audio.channels,
+            device_index=self.config.audio.device_index,
+            vad_energy_threshold=self.config.audio.vad_energy_threshold,
+            chunk_pause_threshold_seconds=self.config.stream.chunk_pause_threshold_seconds,
+            max_chunk_duration_seconds=self.config.stream.max_chunk_duration_seconds,
+            silence_duration_seconds=self.config.audio.silence_duration_seconds,
+            enable_noise_reduction=self.config.audio.enable_noise_reduction,
+            on_level_update=self.hud.update_audio_level,
+            on_chunk_ready=self._on_stream_chunk_ready,
+            on_silence_timeout=self._on_stream_silence_timeout,
+        )
+
+        # 2. Whole-thought Audio Recorder (Smart Mode)
         self.recorder = AudioRecorder(
             sample_rate=self.config.audio.sample_rate,
             channels=self.config.audio.channels,
@@ -46,7 +72,7 @@ class SpicDaemon:
             on_level_update=self.hud.update_audio_level,
         )
 
-        # Tap-to-Start, Action-to-Finish watcher
+        # 3. Tap-to-Start, Action-to-Finish sensor (Keys & Mouse)
         self.activity_watcher = ActivityTerminationWatcher(
             on_activity=self._on_user_activity_detected,
             grace_period_seconds=self.config.shortcuts.activity_termination_grace_seconds,
@@ -76,6 +102,8 @@ class SpicDaemon:
         """Stop daemon and all background listeners."""
         self._running = False
         self.activity_watcher.stop()
+        self.stream_recorder.stop_stream()
+        self.stream_worker.stop(wait=False)
         self.hud.stop()
 
     def _warmup_models(self) -> None:
@@ -87,9 +115,9 @@ class SpicDaemon:
             print("\n" + "=" * 60)
             print(" ✅ SPIC DAEMON IS READY & ACTIVE")
             print("=" * 60)
-            print(" Global Shortcuts Active (Tap-to-Start, Action-to-Finish):")
-            print(f"   • {self.config.shortcuts.fast_dictation:<24} -> Fast Voice Dictation")
-            print(f"   • {self.config.shortcuts.smart_copilot:<24} -> Smart Voice Copilot")
+            print(" Global Shortcuts Active:")
+            print(f"   • {self.config.shortcuts.fast_dictation:<24} -> Fast Voice Dictation (On-the-GO Streaming)")
+            print(f"   • {self.config.shortcuts.smart_copilot:<24} -> Smart Voice Copilot (LLM Reasoning)")
             print(" Tip: Tap shortcut once to speak. Stops on speech pause, any key press, or mouse move!")
             print("=" * 60 + "\n")
         except Exception as e:
@@ -98,50 +126,112 @@ class SpicDaemon:
     def _on_user_activity_detected(self) -> None:
         """Callback when user touches any key or moves/clicks mouse while recording."""
         with self._action_lock:
-            if self.recorder.is_recording:
-                logger.info("⚡ User action detected. Auto-stopping recording...")
-                self._stop_and_process_flow()
+            if self.stream_recorder.is_streaming:
+                logger.info("⚡ User action detected in Fast Stream session. Auto-stopping...")
+                self._stop_fast_stream_flow()
+            elif self.recorder.is_recording:
+                logger.info("⚡ User action detected in Smart Copilot session. Auto-stopping...")
+                self._stop_smart_flow()
 
     # =========================================================================
-    # Voice Dictation Flow (Fast & Smart Modes)
+    # Voice Dictation Entrypoint
     # =========================================================================
     def toggle_listening(self, smart_mode: bool = False) -> None:
-        """Toggle recording state."""
+        """Toggle recording state based on mode."""
         with self._action_lock:
-            if not self.recorder.is_recording:
-                self._start_listening_flow(smart_mode)
+            if smart_mode:
+                if not self.recorder.is_recording:
+                    if self.stream_recorder.is_streaming:
+                        self._stop_fast_stream_flow()
+                    self._start_smart_flow()
+                else:
+                    self._stop_smart_flow()
             else:
-                self._stop_and_process_flow()
+                if not self.stream_recorder.is_streaming:
+                    if self.recorder.is_recording:
+                        self._stop_smart_flow()
+                    self._start_fast_stream_flow()
+                else:
+                    self._stop_fast_stream_flow()
 
-    def _start_listening_flow(self, smart_mode: bool) -> None:
-        """Start listening, display HUD waveform, and activate action-to-finish watcher."""
-        logger.info(f"🎙️ Listening started (Smart Mode: {smart_mode})...")
-        self._current_smart_mode = smart_mode
+    # =========================================================================
+    # Fast Mode: Continuous On-the-GO Stream Dictation (Live Chunk Injection)
+    # =========================================================================
+    def _start_fast_stream_flow(self) -> None:
+        """Begin continuous live streaming Fast Dictation."""
+        logger.info("🚀 [Fast Stream Dictation] Started live listening session...")
         self.hud.show_listening()
-
-        def _on_silence_auto_stop():
-            with self._action_lock:
-                if self.recorder.is_recording:
-                    logger.info("Silence detected. Auto-stopping recording...")
-                    self._stop_and_process_flow()
+        self.stream_worker.start()
 
         try:
-            # Activate user interaction sensor
             self.activity_watcher.start()
-
-            self.recorder.start_recording(
-                auto_stop_on_silence=True,
-                on_silence=_on_silence_auto_stop,
-            )
+            self.stream_recorder.start_stream()
         except Exception as e:
-            logger.error(f"Failed to start recording: {e}")
+            logger.error(f"Failed to start stream recorder: {e}")
             self.activity_watcher.stop()
             self.hud.hide()
 
-    def _stop_and_process_flow(self) -> None:
-        """Stop recording, deactivate sensor, transcribe, interpret, and inject."""
+    def _stop_fast_stream_flow(self) -> None:
+        """End continuous live streaming Fast Dictation session."""
         self.activity_watcher.stop()
-        logger.info("Stopping recording and beginning processing pipeline...")
+        logger.info("🛑 [Fast Stream Dictation] Finalizing live stream chunks...")
+        self.hud.show_processing()
+        self.stream_recorder.stop_stream()
+
+    def _on_stream_chunk_ready(self, audio_np, is_final: bool) -> None:
+        """Callback from StreamAudioRecorder when a speech chunk is sliced."""
+        self.stream_worker.enqueue_chunk(audio_np, is_final)
+
+    def _on_stream_chunk_injected(self, text: str) -> None:
+        """Callback when a stream chunk has been typed live at the cursor."""
+        logger.debug(f"Stream chunk live injected: '{text}'")
+
+    def _on_stream_finished(self, has_injected: bool = True) -> None:
+        """Callback when all stream chunks have been transcribed and injected."""
+        if has_injected:
+            logger.info("✨ [Fast Stream Dictation] All chunks processed and injected.")
+            self.hud.show_done("✓ Injected")
+        else:
+            logger.info("✨ [Fast Stream Dictation] No speech detected.")
+            self.hud.hide()
+
+    def _on_stream_silence_timeout(self) -> None:
+        """Callback when silence timeout occurs during streaming."""
+        with self._action_lock:
+            if self.stream_recorder.is_streaming:
+                logger.info("Silence timeout reached in Fast Stream. Auto-stopping...")
+                self._stop_fast_stream_flow()
+
+    # =========================================================================
+    # Smart Mode: Full Utterance Context + Few-Shot LLM Reasoning
+    # =========================================================================
+    def _start_smart_flow(self) -> None:
+        """Start smart LLM whole-thought listening flow."""
+        logger.info("🎙️ [Smart Copilot] Listening started...")
+        self._current_smart_mode = True
+        self.hud.show_listening()
+
+        def _on_smart_silence_auto_stop():
+            with self._action_lock:
+                if self.recorder.is_recording:
+                    logger.info("Silence detected in Smart Copilot. Auto-stopping...")
+                    self._stop_smart_flow()
+
+        try:
+            self.activity_watcher.start()
+            self.recorder.start_recording(
+                auto_stop_on_silence=True,
+                on_silence=_on_smart_silence_auto_stop,
+            )
+        except Exception as e:
+            logger.error(f"Failed to start smart recording: {e}")
+            self.activity_watcher.stop()
+            self.hud.hide()
+
+    def _stop_smart_flow(self) -> None:
+        """Stop smart recording, transcribe, interpret, and inject."""
+        self.activity_watcher.stop()
+        logger.info("Stopping smart recording and beginning LLM processing pipeline...")
         self.hud.show_processing()
 
         audio = self.recorder.stop_recording()
@@ -159,7 +249,7 @@ class SpicDaemon:
                     return
 
                 logger.info(f"Raw Speech: '{raw_text}'")
-                final_text = self.interpreter.process(raw_text, force_smart_mode=self._current_smart_mode)
+                final_text = self.interpreter.process(raw_text, force_smart_mode=True)
                 logger.info(f"Final Interpreted Text: '{final_text}'")
 
                 if not final_text:
@@ -231,10 +321,14 @@ class SpicDaemon:
                     self.toggle_listening(smart_mode=True)
                     conn.sendall(b"OK\n")
                 elif data == "STREAM_START":
-                    self.start_stream_dictation()
+                    with self._action_lock:
+                        if not self.stream_recorder.is_streaming:
+                            self._start_fast_stream_flow()
                     conn.sendall(b"OK\n")
                 elif data == "STREAM_STOP":
-                    self.stop_stream_dictation()
+                    with self._action_lock:
+                        if self.stream_recorder.is_streaming:
+                            self._stop_fast_stream_flow()
                     conn.sendall(b"OK\n")
                 elif data == "STOP":
                     conn.sendall(b"BYE\n")

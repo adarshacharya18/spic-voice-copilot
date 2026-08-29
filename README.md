@@ -77,11 +77,21 @@ pip install -r requirements.txt
 python3 -m spic.cli setup-shortcuts
 ```
 
-### 4. Enable Background Autostart on Boot
+### 4. Run Spic (Choose Your Mode)
+
+#### 🧪 Option A: Test in Foreground (Inspect & Audit)
+Run Spic directly in your terminal with live streaming logs. **Zero system persistence** — press `Ctrl + C` anytime to stop:
+```bash
+./scripts/run_daemon.sh
+# or: python3 -m spic.cli start
+```
+
+#### 🚀 Option B: Enable Background Autostart (Once You Trust It)
+When you're ready for Spic to run automatically in the background on system boot:
 ```bash
 python3 -m spic.cli autostart --enable
 ```
-*Spic is now running in the background and will start automatically every time you boot your computer!*
+*(You can disable it anytime with `python3 -m spic.cli autostart --disable`).*
 
 ---
 
@@ -89,13 +99,14 @@ python3 -m spic.cli autostart --enable
 
 | Default Hotkey | Mode | Latency | Description & Behavior |
 |---|---|---|---|
-| **`Ctrl + Alt + Space`** | **Fast Voice Dictation** | `<300ms` | Single tap to start. Instant rule cleaner with verbal punctuation and deletions. Auto-finishes on **speech pause**, **any key press**, or **mouse move**! |
-| **`Ctrl + Super + Space`** | **Smart Voice Copilot** | `~2-3s` | Single tap to start. Deep LLM interpretation (`llama3.2:3b` / Cloud) with conversational self-corrections. Auto-finishes on **speech pause**, **any key press**, or **mouse move**! |
+| **`Ctrl + Alt + Space`** | **Fast Dictation (On-the-GO Streaming)** | `Live on Pauses` | Single tap to start. **Continuously streams speech live at your cursor on every 450ms natural pause!** Auto-finishes on **any key press**, **mouse move**, or **5s silence**. |
+| **`Ctrl + Super + Space`** | **Smart Voice Copilot (LLM Reasoning)** | `~2-3s` | Single tap to start. Captures complete utterance for deep LLM reasoning (`llama3.2:3b` / Cloud) with conversational self-corrections. Auto-finishes on **any key press**, **mouse move**, or **5s silence**. |
 
 ### How It Works:
 1. **Tap shortcut once:** Spic immediately opens the floating wave HUD and begins listening.
 2. **Speak naturally:** Hands are 100% free (no keys held down).
-3. **Finish instantly:** The moment you **press any key** (e.g. `Space`, `Enter`), **move your mouse** ($>15\text{px}$), or **pause speaking**, Spic instantly stops recording and types your text at the cursor!
+   - In **Fast Mode**, each sentence/phrase is typed **live at your cursor** as you speak on natural pauses!
+3. **Finish instantly:** The moment you **press any key** (e.g. `Space`, `Enter`), **move your mouse** ($>15\text{px}$), or **pause for 5 seconds**, Spic instantly finalizes and returns full keyboard control!
 
 ### Customize Your Shortcuts:
 ```bash

@@ -151,7 +151,7 @@ class AudioRecorder:
         bytes_per_sample = 2  # 16-bit PCM = 2 bytes
         chunk_samples = int(self.sample_rate * 0.05)  # 50ms block
         chunk_bytes = chunk_samples * self.channels * bytes_per_sample
-        initial_grace_seconds = 4.0  # Allow 4 seconds for user to start speaking
+        initial_grace_seconds = max(5.0, self.silence_duration_seconds)  # Allow user full thinking window to start speaking
 
         proc = self._process
         if proc is None or proc.stdout is None:

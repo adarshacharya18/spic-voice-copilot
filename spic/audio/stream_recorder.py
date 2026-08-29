@@ -27,9 +27,11 @@ class StreamAudioRecorder:
         vad_energy_threshold: float = 0.015,
         chunk_pause_threshold_seconds: float = 0.45,
         max_chunk_duration_seconds: float = 8.0,
+        silence_duration_seconds: float = 5.0,
         enable_noise_reduction: bool = True,
         on_level_update: Optional[Callable[[float], None]] = None,
         on_chunk_ready: Optional[Callable[[np.ndarray, bool], None]] = None,
+        on_silence_timeout: Optional[Callable[[], None]] = None,
     ):
         self.sample_rate = sample_rate
         self.channels = channels
@@ -37,9 +39,11 @@ class StreamAudioRecorder:
         self.vad_energy_threshold = vad_energy_threshold
         self.chunk_pause_threshold_seconds = chunk_pause_threshold_seconds
         self.max_chunk_duration_seconds = max_chunk_duration_seconds
+        self.silence_duration_seconds = silence_duration_seconds
         self.enable_noise_reduction = enable_noise_reduction
         self.on_level_update = on_level_update
         self.on_chunk_ready = on_chunk_ready
+        self.on_silence_timeout = on_silence_timeout
 
         self.vad = VoiceActivityDetector(energy_threshold=vad_energy_threshold, sample_rate=sample_rate)
         self.enhancer = AudioEnhancer(sample_rate=sample_rate)
@@ -52,6 +56,7 @@ class StreamAudioRecorder:
         # Rolling frame accumulator for active speech chunk
         self._current_chunk_frames: list[np.ndarray] = []
         self._is_in_speech = False
+        self._start_time = 0.0
         self._speech_start_time = 0.0
         self._last_speech_time = 0.0
 
@@ -67,6 +72,7 @@ class StreamAudioRecorder:
 
             self._current_chunk_frames = []
             self._is_in_speech = False
+            self._start_time = time.time()
             self._speech_start_time = 0.0
             self._last_speech_time = 0.0
             self._is_streaming = True
@@ -100,9 +106,24 @@ class StreamAudioRecorder:
             remaining_frames = list(self._current_chunk_frames)
             self._current_chunk_frames = []
 
-        # Terminate capture subprocess outside lock to prevent blocking
+        # Drain any unread audio bytes from stdout pipe before terminating
         if proc is not None:
             try:
+                if proc.stdout is not None:
+                    try:
+                        import os
+                        import fcntl
+                        fd = proc.stdout.fileno()
+                        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                        leftover = proc.stdout.read()
+                        if leftover:
+                            samples = np.frombuffer(leftover, dtype=np.int16).astype(np.float32) / 32768.0
+                            if self.channels > 1:
+                                samples = samples.reshape(-1, self.channels).mean(axis=1)
+                            remaining_frames.append(samples)
+                    except Exception:
+                        pass
                 proc.terminate()
                 proc.wait(timeout=0.2)
             except Exception:
@@ -111,16 +132,15 @@ class StreamAudioRecorder:
                 except Exception:
                     pass
 
-        # Flush final remaining audio chunk
+        # Flush final remaining audio chunk (never drop final spoken words)
         if remaining_frames:
             raw_audio = np.concatenate(remaining_frames, axis=0).flatten()
-            trimmed = self.vad.trim_silence(raw_audio)
-            if self.enable_noise_reduction and trimmed.size > 0:
-                trimmed = self.enhancer.enhance(trimmed)
+            if self.enable_noise_reduction and raw_audio.size > 0:
+                raw_audio = self.enhancer.enhance(raw_audio)
 
-            if trimmed.size > int(self.sample_rate * 0.15):  # At least 150ms of audio
+            if raw_audio.size >= int(self.sample_rate * 0.08):  # At least 80ms of audio
                 if self.on_chunk_ready:
-                    self.on_chunk_ready(trimmed, True)
+                    self.on_chunk_ready(raw_audio, True)
                 return
 
         # Emit empty final marker so consumer knows stream has concluded
@@ -221,12 +241,18 @@ class StreamAudioRecorder:
                 # Emit extracted speech slice outside lock
                 if chunk_to_emit is not None and chunk_to_emit.size > int(self.sample_rate * 0.2):
                     trimmed = self.vad.trim_silence(chunk_to_emit)
-                    if self.enable_noise_reduction and trimmed.size > 0:
-                        trimmed = self.enhancer.enhance(trimmed)
-
                     if trimmed.size > int(self.sample_rate * 0.15):
                         if self.on_chunk_ready:
                             self.on_chunk_ready(trimmed, False)
+
+                # Check for silence timeout (e.g. 5.0s without speech)
+                ref_time = self._last_speech_time if self._last_speech_time > 0 else self._start_time
+                if self._start_time > 0 and (now - ref_time) >= self.silence_duration_seconds:
+                    logger.info(f"Silence timeout reached in stream session ({self.silence_duration_seconds:.1f}s). Auto-finalizing...")
+                    if self.on_silence_timeout:
+                        cb = self.on_silence_timeout
+                        threading.Thread(target=cb, daemon=True).start()
+                    break
 
             except Exception as e:
                 logger.error(f"Error in stream audio loop: {e}")

@@ -17,7 +17,7 @@ class AudioConfig(BaseModel):
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz (16kHz recommended for Whisper)")
     channels: int = Field(default=1, description="Number of audio channels (1 = mono)")
     device_index: Optional[int] = Field(default=None, description="Audio device index (None = system default / PipeWire)")
-    silence_duration_seconds: float = Field(default=1.0, description="Seconds of silence before auto-stop in toggle mode")
+    silence_duration_seconds: float = Field(default=5.0, description="Seconds of silence before auto-stop fallback in toggle mode")
     vad_energy_threshold: float = Field(default=0.015, description="Energy threshold for voice activity detection")
     enable_noise_reduction: bool = Field(default=True, description="Apply lightweight noise gate and normalization")
 

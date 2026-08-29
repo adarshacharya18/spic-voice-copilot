@@ -16,7 +16,7 @@ The configuration file and directory are secured with strict `0600`/`0700` POSIX
     "sample_rate": 16000,
     "channels": 1,
     "device_index": null,
-    "silence_duration_seconds": 1.0,
+    "silence_duration_seconds": 5.0,
     "vad_energy_threshold": 0.015,
     "enable_noise_reduction": true
   },

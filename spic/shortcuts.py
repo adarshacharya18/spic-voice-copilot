@@ -396,7 +396,7 @@ def _get_target_ecodes_groups(binding: str) -> list[set[int]]:
 
 
 class ActivityTerminationWatcher:
-    """Watches for user interaction (any key press or mouse move/click) to immediately stop recording & process."""
+    """Watches physical hardware input devices (keyboards, mice, touchpads) via Linux evdev to immediately stop dictation on user action."""
 
     def __init__(
         self,
@@ -410,56 +410,30 @@ class ActivityTerminationWatcher:
 
         self._active = False
         self._start_time = 0.0
-        self._initial_mouse_pos: Optional[Tuple[int, int]] = None
         self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
 
-        self._keyboard_listener = None
-        self._mouse_listener = None
+        # Cumulative mouse motion accumulator
+        self._accum_dx = 0.0
+        self._accum_dy = 0.0
 
     def start(self) -> None:
-        """Start listening for user interaction."""
+        """Start listening for user interaction on hardware devices."""
         with self._lock:
             if self._active:
                 return
             self._active = True
             self._start_time = time.time()
-            self._initial_mouse_pos = None
+            self._accum_dx = 0.0
+            self._accum_dy = 0.0
 
-            try:
-                import pynput
-                self._keyboard_listener = pynput.keyboard.Listener(on_press=self._on_key_press)
-                self._keyboard_listener.daemon = True
-                self._keyboard_listener.start()
-
-                self._mouse_listener = pynput.mouse.Listener(
-                    on_move=self._on_mouse_move,
-                    on_click=self._on_mouse_click,
-                )
-                self._mouse_listener.daemon = True
-                self._mouse_listener.start()
-            except Exception as e:
-                logger.debug(f"ActivityTerminationWatcher listener notice: {e}")
+            self._thread = threading.Thread(target=self._evdev_monitor_loop, daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
         """Stop listening for user interaction."""
         with self._lock:
-            if not self._active:
-                return
             self._active = False
-
-            if self._keyboard_listener is not None:
-                try:
-                    self._keyboard_listener.stop()
-                except Exception:
-                    pass
-                self._keyboard_listener = None
-
-            if self._mouse_listener is not None:
-                try:
-                    self._mouse_listener.stop()
-                except Exception:
-                    pass
-                self._mouse_listener = None
 
     def _trigger(self, reason: str) -> None:
         should_call = False
@@ -476,24 +450,110 @@ class ActivityTerminationWatcher:
                 except Exception as e:
                     logger.error(f"Error in on_activity callback: {e}")
 
-    def _on_key_press(self, key) -> None:
-        self._trigger("key_press")
-
-    def _on_mouse_click(self, x, y, button, pressed) -> None:
-        if pressed:
-            self._trigger("mouse_click")
-
-    def _on_mouse_move(self, x, y) -> None:
-        if self._initial_mouse_pos is None:
-            self._initial_mouse_pos = (x, y)
+    def _evdev_monitor_loop(self) -> None:
+        """Monitor hardware evdev devices using select.select."""
+        try:
+            import evdev
+            from evdev import ecodes
+            import select
+        except ImportError:
+            logger.debug("evdev or select not available for ActivityTerminationWatcher")
             return
 
-        ix, iy = self._initial_mouse_pos
-        dx = x - ix
-        dy = y - iy
-        dist = (dx * dx + dy * dy) ** 0.5
-        if dist >= self.mouse_threshold_px:
-            self._trigger(f"mouse_move_{int(dist)}px")
+        devices: dict[int, evdev.InputDevice] = {}
+
+        def _refresh_devices():
+            nonlocal devices
+            try:
+                available_paths = evdev.list_devices()
+                current_paths = {d.path for d in devices.values()}
+                for path in available_paths:
+                    if path not in current_paths:
+                        try:
+                            dev = evdev.InputDevice(path)
+                            # Exclude our own virtual keyboard so Spic typing doesn't trigger itself
+                            if "Spic" in dev.name or "uinput" in dev.name.lower():
+                                continue
+
+                            caps = dev.capabilities()
+                            has_keys = ecodes.EV_KEY in caps
+                            has_rel = ecodes.EV_REL in caps
+                            has_abs = ecodes.EV_ABS in caps
+                            if has_keys or has_rel or has_abs:
+                                devices[dev.fd] = dev
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        _refresh_devices()
+        last_refresh = time.time()
+
+        while self._active:
+            if not devices:
+                time.sleep(0.1)
+                _refresh_devices()
+                continue
+
+            if time.time() - last_refresh > 3.0:
+                _refresh_devices()
+                last_refresh = time.time()
+
+            try:
+                r, _, _ = select.select(list(devices.keys()), [], [], 0.1)
+                if not self._active:
+                    break
+
+                dead_fds = []
+                for fd in r:
+                    dev = devices.get(fd)
+                    if dev is None:
+                        continue
+
+                    try:
+                        for event in dev.read():
+                            if not self._active:
+                                break
+
+                            # 1. Hardware Key Press Event (value == 1: Press)
+                            if event.type == ecodes.EV_KEY and event.value == 1:
+                                self._trigger(f"key_press_{event.code}")
+                                return
+
+                            # 2. Relative Mouse Motion Event
+                            elif event.type == ecodes.EV_REL:
+                                if event.code == ecodes.REL_X:
+                                    self._accum_dx += event.value
+                                elif event.code == ecodes.REL_Y:
+                                    self._accum_dy += event.value
+
+                                dist = (self._accum_dx ** 2 + self._accum_dy ** 2) ** 0.5
+                                if dist >= self.mouse_threshold_px:
+                                    self._trigger(f"mouse_move_{int(dist)}px")
+                                    return
+
+                    except (OSError, IOError):
+                        dead_fds.append(fd)
+
+                for fd in dead_fds:
+                    if fd in devices:
+                        try:
+                            devices[fd].close()
+                        except Exception:
+                            pass
+                        del devices[fd]
+
+            except Exception as e:
+                if self._active:
+                    time.sleep(0.1)
+
+        # Cleanup opened device handles
+        for dev in list(devices.values()):
+            try:
+                dev.close()
+            except Exception:
+                pass
+        devices.clear()
 
 
 class GlobalKeyHoldListener:

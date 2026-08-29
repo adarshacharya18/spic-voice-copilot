@@ -97,18 +97,30 @@ Bind your preferred keys to execute these commands in your window manager config
 
 ---
 
-### Step 5: Enable Autostart on PC Boot
+### Step 5: Run Spic (Choose Your Mode)
 
-Configure Spic to run automatically as a lightweight background `systemd` user service:
+Spic gives you complete control over how it runs on your system:
 
+#### 🧪 Option A: Test in Foreground (Inspect & Audit First)
+If you want to test Spic first without modifying your system startup:
 ```bash
-python3 -m spic.cli autostart --enable
+# Start in foreground with live console logs
+./scripts/run_daemon.sh
+# or: python3 -m spic.cli start
 ```
+- **100% Transparent:** You will see model loading, mic activity, and text injection logs in real-time.
+- **Zero Persistence:** Press `Ctrl + C` at any time to instantly kill the daemon. Nothing is added to system startup.
 
-Verify that Spic is running active and healthy:
+#### 🚀 Option B: Enable Background Autostart (Once You Trust It)
+Once you've tested Spic and want it to launch automatically whenever your computer boots:
 ```bash
+# Enable user systemd service
+python3 -m spic.cli autostart --enable
+
+# Check service status
 python3 -m spic.cli autostart --status
 ```
+*(To disable autostart at any time, simply run `python3 -m spic.cli autostart --disable`).*
 
 ---
 

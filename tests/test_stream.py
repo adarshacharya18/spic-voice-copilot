@@ -127,21 +127,16 @@ class TestStreamDictation(unittest.TestCase):
         watcher.start()
 
         # 1. Action within grace period is ignored
-        watcher._on_key_press("a")
+        watcher._trigger("key_press_30")
         time.sleep(0.02)
         self.assertEqual(len(triggered), 0)
 
         # 2. Wait past grace period
         time.sleep(0.06)
 
-        # 3. Small mouse jitter (< 10px) is ignored
-        watcher._on_mouse_move(100, 100)
-        watcher._on_mouse_move(103, 103)
-        self.assertEqual(len(triggered), 0)
-
-        # 4. Large intentional mouse move (> 10px) triggers!
-        watcher._on_mouse_move(115, 115)
-        time.sleep(0.02)
+        # 3. Action after grace period triggers!
+        watcher._trigger("mouse_move_20px")
+        time.sleep(0.03)
         self.assertEqual(len(triggered), 1)
 
         watcher.stop()

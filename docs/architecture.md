@@ -11,7 +11,7 @@ flowchart TD
     subgraph Input_Layer ["🎤 Audio & Trigger Layer"]
         Hotkey["GNOME Global Hotkeys<br>(Ctrl+Alt+Space / Ctrl+Super+Space)"] -->|IPC Socket Trigger| Daemon["Spic Daemon<br>(Unix Domain Socket 0600)"]
         Sensor["ActivityTerminationWatcher<br>(Keypress & Mouse Vector Sensor)"] -->|Instant Finish Signal| Daemon
-        Mic["Microphone"] -->|PipeWire 16kHz s16 PCM| AudioRec["PipeWire Audio Streamer<br>(pw-record + Dynamic VAD)"]
+        Mic["Microphone"] -->|PipeWire 16kHz s16 PCM| StreamRec["Stream Audio Recorder<br>(pw-record + Pause Slicer 450ms)"]
     end
 
     subgraph Visual_Layer ["✨ Ambient Motion Layer"]
@@ -19,17 +19,18 @@ flowchart TD
     end
 
     subgraph Intelligence_Layer ["🧠 Cognitive Memory & Speech Pipeline"]
-        AudioRec --> STT["Local STT Engine<br>(faster-whisper CPU int8)"]
+        StreamRec -->|Speech Slices on Pauses| Worker["Stream Transcription Worker<br>(Async FIFO Queue + Rolling Prompt)"]
+        Worker --> STT["Local STT Engine<br>(faster-whisper CPU int8)"]
         
         STT -->|Raw Speech| Router["Interpreter & Router"]
-        Router -->|Fast Dictation Mode| RuleCleaner["Deterministic Rule Cleaner<br>(Deletions, Self-Corrections, Punctuation)"]
+        Router -->|Fast Mode (On-the-GO)| Spacing["Rule Cleaner & Smart Chunk Spacing"]
         Router -->|Smart Mode| LLM["Few-Shot LLM Router<br>(Ollama llama3.2:3b / Groq / Gemini / OpenAI)"]
         
         Memory[(CoALA Cognitive Memory<br>SQLite + FTS5 Hybrid Store 0600)] <-->|Context Synthesis & Recall| LLM
     end
 
     subgraph Output_Layer ["⌨️ Universal Wayland Injection Layer"]
-        RuleCleaner -->|Sanitized Text| Injector["Universal Input Injector"]
+        Spacing -->|Live Stream Chunks| Injector["Universal Input Injector"]
         LLM -->|Polished Output| Injector
         Injector -->|Hardware Key Events| UInput["Linux Kernel /dev/uinput<br>(Spic Virtual Keyboard)"]
         UInput -->|Direct Hardware Keystrokes| ActiveApp["Active Focused Window<br>(VS Code, Terminal, Browser, Slack)"]
@@ -40,40 +41,27 @@ flowchart TD
 
 ## 2. Core Subsystems
 
-### A. Tap-to-Start, Action-to-Finish Engine (`spic.shortcuts`, `spic.daemon`)
+### A. Fast Mode: On-the-GO Live Continuous Streaming (`spic.audio`, `spic.stt`)
+- **Real-Time VAD Pause Slicing:** Continuous audio captured via PipeWire is analyzed in 50ms frames using RMS energy tracking. Every natural pause ($450\text{ms}$) or chunk maximum ($8.0\text{s}$) slices a speech chunk and immediately passes it to the transcription queue.
+- **Async FIFO Transcription Worker (`StreamTranscriptionWorker`):** Transcribes audio slices asynchronously in background threads ($<180\text{ms}$) and types each chunk **live at the cursor** while you continue speaking!
+- **Smart Inter-Chunk Spacing:** Evaluates boundary tokens to manage spacing and punctuation dynamically (e.g. prepending whitespace before words while adhering directly to commas, periods, and colons).
+
+### B. Smart Mode: Whole-Utterance LLM Reasoning (`spic.interpreter`, `spic.memory`)
+- **Full Context Capture:** Captures the complete spoken thought before invoking the LLM, giving the model full conversational context.
+- **Few-Shot Self-Correction Architecture:** Detects conversational repairs, phrase retries, and deletions (*"select screenshot in the left drawer from the drawer"* $\to$ *"Select screenshot from the drawer"*).
+- **CoALA Cognitive Memory Recall:** Merges relevant semantic preferences and episodic memory items into prompt context.
+
+### C. Tap-to-Start, Action-to-Finish Engine (`spic.shortcuts`)
 - **Zero Key Holding:** Users tap `Ctrl + Alt + Space` or `Ctrl + Super + Space` once to activate. Hands remain completely free during speech.
 - **Gesture & Hardware Termination:** The `ActivityTerminationWatcher` activates with a **250ms release grace period**:
-  - The instant the user **presses any key** (e.g. `Space`, `Enter`, or resumes typing), **moves the mouse** ($>15\text{px}$ vector), or **clicks**, recording instantly terminates and triggers processing.
-  - **Silence VAD Fallback:** If no manual action is taken, a 1.0s silence detector automatically finalizes the input.
+  - The instant the user **presses any key** (e.g. `Space`, `Enter`, or resumes typing), **moves the mouse** ($>15\text{px}$ vector), or **clicks**, recording instantly terminates and returns full keyboard control.
+  - **Silence VAD Fallback:** If no manual action is taken, a 5.0s silence detector automatically finalizes the input.
 
-### B. Non-Blocking Audio Capture (`spic.audio`)
-- **Native PipeWire Streaming:** Uses `pw-record --rate 16000 --channels 1 --format s16 --raw -` to pipe raw mono PCM audio directly into a background consumer thread.
-- **Dynamic Voice Activity Detection (VAD):** Continuous RMS energy tracking with exponential headroom calibration.
-
-### C. Multi-Agent Cognitive Memory System (`spic.memory`)
-Engineered according to the **CoALA (Cognitive Architectures for Language Agents)** framework:
-- **4-Tier Memory Structure:**
-  1. `SEMANTIC`: Long-term facts, user preferences, names, and coding styles.
-  2. `EPISODIC`: Past interactions and contextual transcripts.
-  3. `PROCEDURAL`: Spoken workflows and learned macros.
-  4. `WORKING`: Short-term scratchpad context per active window/session.
-- **Hybrid Search Scoring:**
-  $$\text{Score} = 0.50 \cdot \text{Lexical FTS5} + 0.25 \cdot e^{-\lambda \Delta t} + 0.15 \cdot \text{Importance} + 0.10 \cdot \min(1.0, \frac{\text{Count}}{10})$$
-- **Isolated SQLite Storage:** Persistent database at `~/.config/spic/memory/agent_memory.db` with WAL mode and POSIX `0600` permissions.
-
-### D. Hybrid Speech Interpreter (`spic.interpreter`)
-1. **Tier 1: Fast Rule Cleaner (`RuleCleaner`)**
-   - **Latency:** `<1ms` (Zero delay).
-   - **Features:** Deterministic verbal punctuation parsing (*"period"* -> `.`, *"comma"* -> `,`, *"new line"* -> `\n`), conversational phrase replacements (*"in the left drawer from the drawer"* -> *"from the drawer"*), spoken phrase deletions (*"scratch that"*), and verbal filler filtering (*"um"*, *"uh"*).
-2. **Tier 2: Few-Shot Smart LLM Router (`LLMRouter`)**
-   - **Unified Few-Shot Architecture:** Pre-loads high-signal conversational editing demonstrations into local and cloud LLM prompts, ensuring small local models (`llama3.2:3b`) execute phrase revisions reliably.
-   - **Supported Backends:** Local Ollama, Groq, OpenAI, Anthropic, Google Gemini (via `x-goog-api-key` headers), and OpenRouter.
-
-### E. Universal Wayland Text Injector (`spic.injector`)
+### D. Universal Wayland Text Injector (`spic.injector`)
 - **Kernel Virtual Keyboard:** Emits hardware scancodes through `/dev/uinput` at **1.5ms per character** to type directly into focused applications without depending on X11 or XTest extensions.
 - **Escape Sanitization:** Strips ANSI terminal escape sequences and unprintable control characters to prevent terminal command injection.
 
-### F. Ambient Floating HUD (`spic.ui`)
+### E. Ambient Floating HUD (`spic.ui`)
 - **Physics Transitions:** Features a spring-overshoot drop transition (`ease_out_back`) on activation and an upward glide collapse (`ease_in_cubic`) upon completion.
 - **60 FPS Harmonic Waves:** Renders multi-layered composite sine splines with Gaussian edge envelope damping:
   - **Listening Wave:** Crimson Red (`#FF3B30`) & Coral Sunset audio-reactive harmonic splines.
@@ -84,10 +72,10 @@ Engineered according to the **CoALA (Cognitive Architectures for Language Agents
 
 ## 3. End-to-End Latency Profile
 
-| Stage | Fast Dictation (`Ctrl+Alt+Space`) | Smart Copilot (`Ctrl+Super+Space`) |
+| Stage | Fast Mode (On-the-GO Streaming) | Smart Copilot (LLM Reasoning) |
 |---|---|---|
-| **Audio Capture & VAD** | Streamed in real-time | Streamed in real-time |
-| **STT (Whisper Base CPU int8)** | ~250ms | ~250ms |
-| **Interpretation** | <1ms (Rule Cleaner) | ~2.5s (Ollama) / ~250ms (Groq) |
-| **Hardware Injection (uinput)** | ~50ms | ~50ms |
-| **Total Roundtrip Latency** | **~300ms (Instantaneous)** | **~2.8s (Local) / ~550ms (Cloud)** |
+| **Audio Capture & Slicing** | Sliced every 450ms pause | Full thought capture |
+| **STT (Whisper Base CPU int8)** | ~180ms per chunk | ~250ms |
+| **Interpretation** | <1ms (Rule Cleaner + Spacing) | ~2.5s (Ollama) / ~250ms (Groq) |
+| **Hardware Injection (uinput)** | ~20ms per chunk | ~50ms |
+| **Typing Experience** | **Live streaming chunk-by-chunk at cursor** | **Polished paragraph injected all-at-once** |
