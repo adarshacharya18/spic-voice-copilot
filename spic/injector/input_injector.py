@@ -147,8 +147,12 @@ class InputInjector:
         return False, "failed"
 
     def _sanitize_text(self, text: str) -> str:
-        """Strip ANSI terminal escape sequences and non-printables."""
-        clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+        """Strip ANSI terminal escape sequences, OSC commands, and unprintable control characters."""
+        # 1. Strip standard CSI escape sequences (\x1b[...A-Z) and OSC hyperlinks/settings (\x1b]...BEL/\x1b\\)
+        clean = re.sub(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\))", "", text)
+        # 2. Strip any standalone escape bytes
+        clean = clean.replace("\x1b", "")
+        # 3. Preserve only printable characters, spaces, tabs, and newlines
         clean = "".join(ch for ch in clean if ch in ("\n", "\t") or (ord(ch) >= 32 and ord(ch) != 127))
         return clean.rstrip("\r\n")
 

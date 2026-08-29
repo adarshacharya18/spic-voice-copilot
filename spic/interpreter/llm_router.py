@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import time
 from typing import Optional
 import requests
 
@@ -22,6 +24,24 @@ class LLMRouter:
         self.config = config
         self.rule_cleaner = RuleCleaner()
         self.memory = memory or AgentMemoryCoordinator()
+        self._last_notify_time = 0.0
+
+    def _notify_missing_provider(self, title: str, details: str) -> None:
+        """Send a friendly rate-limited desktop notification when an LLM provider or model is missing."""
+        now = time.time()
+        if now - self._last_notify_time < 30.0:  # Rate limit: max once every 30 seconds
+            return
+        self._last_notify_time = now
+
+        try:
+            msg = f"{details}\nUsing fast rule cleaner for this input."
+            subprocess.run(
+                ["notify-send", "-a", "Spic Voice Copilot", "-i", "dialog-information", f"💡 {title}", msg],
+                check=False,
+                timeout=1.0,
+            )
+        except Exception:
+            pass
 
     def process(self, raw_text: str, force_smart_mode: Optional[bool] = None) -> str:
         """Process transcription. If smart mode is disabled, uses rule cleaner."""
@@ -131,11 +151,25 @@ class LLMRouter:
             },
         }
 
-        resp = requests.post(url, json=payload, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("message", {}).get("content", "").strip()
-        return self._sanitize_llm_output(result, original_text=text)
+        try:
+            resp = requests.post(url, json=payload, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("message", {}).get("content", "").strip()
+            return self._sanitize_llm_output(result, original_text=text)
+        except requests.exceptions.ConnectionError:
+            self._notify_missing_provider(
+                "Ollama Not Running",
+                "Ollama is not running locally. To enable local AI: start Ollama or run 'ollama run llama3.2:3b'.",
+            )
+            raise
+        except requests.exceptions.HTTPError as e:
+            if resp.status_code == 404:
+                self._notify_missing_provider(
+                    "Ollama Model Missing",
+                    f"Model '{self.config.model}' is not installed. Run 'ollama pull {self.config.model}'.",
+                )
+            raise
 
     def _call_groq(self, text: str) -> str:
         """Call Groq Cloud API for ultra-fast inference."""
