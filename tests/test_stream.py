@@ -114,6 +114,38 @@ class TestStreamDictation(unittest.TestCase):
         self.assertEqual(len(stop_calls), 1)
         listener.stop()
 
+    def test_activity_termination_watcher(self):
+        """Verify that user activity (key press or mouse move) triggers instant termination."""
+        from spic.shortcuts import ActivityTerminationWatcher
+
+        triggered = []
+        watcher = ActivityTerminationWatcher(
+            on_activity=lambda: triggered.append(1),
+            grace_period_seconds=0.05,
+            mouse_threshold_px=10.0,
+        )
+        watcher.start()
+
+        # 1. Action within grace period is ignored
+        watcher._on_key_press("a")
+        time.sleep(0.02)
+        self.assertEqual(len(triggered), 0)
+
+        # 2. Wait past grace period
+        time.sleep(0.06)
+
+        # 3. Small mouse jitter (< 10px) is ignored
+        watcher._on_mouse_move(100, 100)
+        watcher._on_mouse_move(103, 103)
+        self.assertEqual(len(triggered), 0)
+
+        # 4. Large intentional mouse move (> 10px) triggers!
+        watcher._on_mouse_move(115, 115)
+        time.sleep(0.02)
+        self.assertEqual(len(triggered), 1)
+
+        watcher.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

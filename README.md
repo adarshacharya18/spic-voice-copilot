@@ -10,7 +10,7 @@
 [![Local AI](https://img.shields.io/badge/AI-100%25%20Local%20%26%20Private-brightgreen.svg)](https://ollama.com)
 
 **Speak anywhere. Type everywhere.**  
-Spic is a lightweight background daemon that brings a fluid, continuous voice experience natively to Linux desktops with zero cloud dependencies, on-the-go stream dictation, cognitive multi-agent memory, and kernel-level hardware typing.
+Spic is a lightweight background daemon that brings an effortless voice typing experience natively to Linux desktops with zero cloud dependencies, "Tap-to-Start, Action-to-Finish" gesture termination, cognitive multi-agent memory, and kernel-level hardware typing.
 
 ---
 
@@ -18,13 +18,12 @@ Spic is a lightweight background daemon that brings a fluid, continuous voice ex
 
 ## ✨ Key Features
 
-- 🚀 **On-the-GO Continuous Stream Dictation:** Hold hotkey to speak continuously. Natural pauses (450ms) are sliced, transcribed asynchronously, and typed live at your cursor with smart inter-chunk spacing.
-- ⏱️ **500ms Hold Intent Timer:** Accidental taps (<500ms) are completely ignored with zero mic or HUD flickering.
-- 🧠 **CoALA Multi-Agent Cognitive Memory:** 4-tier persistent memory (Semantic, Episodic, Procedural, Working) with SQLite + FTS5 full-text search, dynamic exponential temporal decay, and hybrid utility scoring.
+- ⚡ **Tap-to-Start, Action-to-Finish:** Tap hotkey once to speak. Hands remain 100% free. Spic finishes and types the instant you **press any key**, **move your mouse**, or **pause speaking**!
 - 🔒 **100% Local & Private:** Runs completely on your machine via CPU-quantized Whisper (`faster-whisper` `int8`) and local Ollama SLMs (`llama3.2:3b`). Zero audio is sent over the internet.
-- 🪄 **Few-Shot Conversational Self-Corrections:** Automatically replaces conversational corrections and phrase retries (*"select screenshot in the left drawer from the drawer"* $\to$ *"Select screenshot from the drawer"*).
-- ⌨️ **Native Wayland & X11 Support:** Uses Linux Kernel `/dev/uinput` virtual hardware keyboards to bypass Wayland window isolation, allowing seamless typing in VS Code, Terminal, Chrome, Slack, Discord, and LibreOffice.
-- 🎨 **Ambient Translucent Wave HUD:** Minimalist floating overlay with physics-based spring drop transitions, reactive harmonic voice ribbons, and zero distracting text.
+- 🪄 **Few-Shot Conversational Self-Corrections:** Automatically detects spoken clause retries (*"select screenshot in the left drawer from the drawer"* $\to$ *"Select screenshot from the drawer"*).
+- 🧠 **CoALA Multi-Agent Cognitive Memory:** 4-tier persistent memory (Semantic, Episodic, Procedural, Working) with SQLite + FTS5 search, exponential temporal decay, and hybrid utility scoring.
+- ⌨️ **Native Wayland & X11 Support:** Uses Linux Kernel `/dev/uinput` virtual hardware keyboards to bypass Wayland window isolation, typing seamlessly in VS Code, Terminal, Chrome, Slack, Discord, and LibreOffice.
+- 🎨 **Ambient Translucent Wave HUD:** Minimalist 60 FPS floating overlay with physics-based spring drop transitions, reactive harmonic voice ribbons, and zero distracting text.
 - 🌐 **Pluggable Cloud LLM Support:** Header-authenticated cloud API support (Groq at 500+ tok/s, Google Gemini, OpenAI, Claude, OpenRouter).
 - 🛡️ **Hardened Linux Security:** Enforces `0700`/`0600` file permissions, Unix domain socket peer credential verification (`SO_PEERCRED`), and ANSI escape sequence sanitization.
 
@@ -53,7 +52,9 @@ Spic is a lightweight background daemon that brings a fluid, continuous voice ex
 
 ---
 
-## 🚀 Quickstart (3 Steps)
+## 🚀 Quickstart (4 Steps)
+
+*For detailed distro-specific instructions, see the [Installation Guide](docs/installation.md).*
 
 ### 1. Clone and Install
 ```bash
@@ -69,25 +70,32 @@ pip install -r requirements.txt
 ```bash
 ./scripts/setup_uinput.sh
 ```
+*(If prompted, log out and log back in for `input` group permissions to take effect).*
 
-### 3. Start Spic & Register Hotkeys
+### 3. Register Desktop Shortcuts
 ```bash
-# Register GNOME system hotkeys
 python3 -m spic.cli setup-shortcuts
-
-# Start background daemon
-./scripts/run_daemon.sh
 ```
+
+### 4. Enable Background Autostart on Boot
+```bash
+python3 -m spic.cli autostart --enable
+```
+*Spic is now running in the background and will start automatically every time you boot your computer!*
 
 ---
 
-## ⌨️ Hotkeys & Dictation Modes
+## ⌨️ Hotkeys & Dictation Modes (Tap-to-Start, Action-to-Finish)
 
-| Default Hotkey | Mode | Behavior | Description |
+| Default Hotkey | Mode | Latency | Description & Behavior |
 |---|---|---|---|
-| **Hold `RightControl`** | **On-the-GO Stream** | `Live on Pauses` | Hold for >500ms to speak continuously. Audio is sliced on natural pauses and typed live at your cursor. |
-| **`Ctrl + Alt + Space`** | **Fast Dictation** | `<300ms` | Toggle voice typing with verbal punctuation (*"period"*, *"comma"*, *"new line"*) and instant deletions (*"scratch that"*). |
-| **`Ctrl + Super + Space`** | **Smart Copilot** | `~2-3s` | Deep LLM interpretation using local `llama3.2:3b` or Cloud APIs with few-shot conversational self-corrections. |
+| **`Ctrl + Alt + Space`** | **Fast Voice Dictation** | `<300ms` | Single tap to start. Instant rule cleaner with verbal punctuation and deletions. Auto-finishes on **speech pause**, **any key press**, or **mouse move**! |
+| **`Ctrl + Super + Space`** | **Smart Voice Copilot** | `~2-3s` | Single tap to start. Deep LLM interpretation (`llama3.2:3b` / Cloud) with conversational self-corrections. Auto-finishes on **speech pause**, **any key press**, or **mouse move**! |
+
+### How It Works:
+1. **Tap shortcut once:** Spic immediately opens the floating wave HUD and begins listening.
+2. **Speak naturally:** Hands are 100% free (no keys held down).
+3. **Finish instantly:** The moment you **press any key** (e.g. `Space`, `Enter`), **move your mouse** ($>15\text{px}$), or **pause speaking**, Spic instantly stops recording and types your text at the cursor!
 
 ### Customize Your Shortcuts:
 ```bash
@@ -121,9 +129,6 @@ python3 -m spic.cli memory --prune --max-age-days 90
 ## 🧪 CLI Diagnostics & Tools
 
 ```bash
-# Test continuous stream dictation pipeline
-python3 -m spic.cli test-stream
-
 # Test microphone levels via PipeWire
 python3 -m spic.cli test-mic
 
@@ -159,21 +164,14 @@ Spic is configured via `~/.config/spic/config.json`:
     "model": "llama3.2:3b",
     "base_url": "http://localhost:11434"
   },
-  "stream": {
-    "chunk_pause_threshold_seconds": 0.45,
-    "max_chunk_duration_seconds": 8.0,
-    "smart_spacing": true
-  },
   "shortcuts": {
     "fast_dictation": "<Control><Alt>space",
-    "smart_copilot": "<Control><Super>space",
-    "hold_stream_dictation": "<RightControl>",
-    "hold_trigger_delay_ms": 500
+    "smart_copilot": "<Control><Super>space"
   }
 }
 ```
 
-*For complete configuration options, see the [Configuration Guide](docs/configuration.md).*
+*For complete configuration options and cloud providers (Groq, Gemini, Claude, OpenAI), see the [Configuration Guide](docs/configuration.md).*
 
 ---
 
@@ -181,12 +179,18 @@ Spic is configured via `~/.config/spic/config.json`:
 
 ```mermaid
 flowchart LR
-    Mic["🎤 Microphone"] -->|PipeWire PCM| VAD["VAD Pause Slicer (450ms)"]
-    VAD --> STT["Whisper Base int8"]
+    Hotkey["⌨️ Tap Shortcut (Ctrl+Alt+Space)"] --> Spic["🎙️ Spic Daemon"]
+    Spic --> Sensor["⚡ Activity Sensor (Keys & Mouse)"]
+    Spic --> Mic["🎤 PipeWire Audio Stream"]
+    
+    Sensor -.->|Any Key Press or Mouse Move| Stop["Instant Cutoff"]
+    Stop --> STT["Whisper Base int8"]
     STT --> Router{"Interpreter Router"}
-    Router -->|Fast Stream| Spacing["Smart Inter-Chunk Spacing"]
+    
+    Router -->|Fast Mode| Rules["Deterministic Rule Cleaner"]
     Router -->|Smart Mode| LLM["Few-Shot LLM + CoALA Memory"]
-    Spacing --> Injector["Universal Injector"]
+    
+    Rules --> Injector["Universal Injector"]
     LLM --> Injector
     Injector -->|Hardware Keystrokes| UInput["Kernel /dev/uinput Device"]
     UInput --> App["Focused Active Window"]
@@ -198,6 +202,7 @@ flowchart LR
 
 ## 📚 Documentation Index
 
+- [Installation & Linux Distro Setup Guide](docs/installation.md)
 - [Technical Architecture & Design](docs/architecture.md)
 - [CoALA Cognitive Memory Architecture](docs/memory.md)
 - [Configuration Reference](docs/configuration.md)

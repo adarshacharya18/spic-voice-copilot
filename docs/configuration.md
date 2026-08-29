@@ -47,44 +47,25 @@ The configuration file and directory are secured with strict `0600`/`0700` POSIX
     "hud_width": 220,
     "hud_height": 64
   },
-  "stream": {
-    "chunk_pause_threshold_seconds": 0.45,
-    "max_chunk_duration_seconds": 8.0,
-    "smart_spacing": true
-  },
   "shortcuts": {
     "fast_dictation": "<Control><Alt>space",
-    "smart_copilot": "<Control><Super>space",
-    "hold_stream_dictation": "<RightControl>",
-    "hold_trigger_delay_ms": 500
+    "smart_copilot": "<Control><Super>space"
   }
 }
 ```
 
 ---
 
-## 2. Stream Dictation Configuration (`stream`)
+## 2. Shortcuts Configuration (`shortcuts`)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `chunk_pause_threshold_seconds` | `float` | `0.45` | Silence duration in seconds required to trigger a live stream chunk slice. |
-| `max_chunk_duration_seconds` | `float` | `8.0` | Maximum speech duration before forcing a chunk transcription. |
-| `smart_spacing` | `bool` | `true` | Automatically formats spaces and transitions between sequential stream chunks. |
+| `fast_dictation` | `string` | `"<Control><Alt>space"` | Global hotkey for Fast Voice Dictation (<300ms) with verbal punctuation. |
+| `smart_copilot` | `string` | `"<Control><Super>space"` | Global hotkey for Smart Voice Copilot with LLM self-corrections. |
 
 ---
 
-## 3. Shortcuts Configuration (`shortcuts`)
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `fast_dictation` | `string` | `"<Control><Alt>space"` | Hotkey for instant toggle voice dictation with rule cleaning. |
-| `smart_copilot` | `string` | `"<Control><Super>space"` | Hotkey for smart LLM voice copilot with self-corrections. |
-| `hold_stream_dictation` | `string` | `"<RightControl>"` | Hotkey to hold for continuous On-the-GO stream dictation. |
-| `hold_trigger_delay_ms` | `int` | `500` | Minimum hold duration in milliseconds before activating stream dictation (cancels accidental taps). |
-
----
-
-## 4. LLM Provider Configurations
+## 3. LLM Provider Configurations
 
 ### A. Local Ollama (100% Offline & Private)
 

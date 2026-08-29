@@ -509,6 +509,80 @@ def cmd_memory(args) -> None:
         print()
 
 
+def cmd_autostart(args) -> None:
+    """Manage systemd user service for background daemon autostart on PC boot."""
+    systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
+    service_file = systemd_user_dir / "spic.service"
+
+    python_bin = sys.executable
+    work_dir = _ROOT_DIR
+
+    if args.enable:
+        print("⚙️ Setting up systemd user service for Spic...")
+        systemd_user_dir.mkdir(parents=True, exist_ok=True)
+
+        service_content = f"""[Unit]
+Description=Spic Linux Voice Copilot Background Daemon
+Documentation=https://github.com/adarshacharya18/spic-voice-copilot
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={python_bin} -m spic.daemon
+WorkingDirectory={work_dir}
+Restart=on-failure
+RestartSec=3s
+Environment=PYTHONUNBUFFERED=1
+Environment=GDK_BACKEND=x11
+
+[Install]
+WantedBy=graphical-session.target
+"""
+        service_file.write_text(service_content, encoding="utf-8")
+        os.chmod(str(service_file), 0o644)
+        print(f"✓ Created service unit: {service_file}")
+
+        try:
+            import subprocess
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "--user", "enable", "spic.service"], check=True)
+            subprocess.run(["systemctl", "--user", "restart", "spic.service"], check=True)
+            print("\n🚀 Spic daemon enabled and started automatically on PC boot!")
+            print("To view status: python3 -m spic.cli autostart --status")
+            print("To view live logs: python3 -m spic.cli autostart --logs")
+        except Exception as e:
+            print(f"❌ Failed to enable systemd service: {e}")
+
+    elif args.disable:
+        print("🛑 Disabling Spic systemd user service...")
+        try:
+            import subprocess
+            subprocess.run(["systemctl", "--user", "stop", "spic.service"], check=False)
+            subprocess.run(["systemctl", "--user", "disable", "spic.service"], check=False)
+            if service_file.exists():
+                service_file.unlink()
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+            print("✓ Spic autostart disabled.")
+        except Exception as e:
+            print(f"❌ Failed to disable service: {e}")
+
+    elif args.logs:
+        import subprocess
+        try:
+            subprocess.run(["journalctl", "--user", "-u", "spic.service", "-n", str(args.lines or 50), "--no-pager"])
+        except Exception as e:
+            print(f"Error fetching logs: {e}")
+
+    else:
+        # Default: show status
+        import subprocess
+        try:
+            subprocess.run(["systemctl", "--user", "status", "spic.service"])
+        except Exception as e:
+            print(f"Error checking status: {e}")
+
+
 def cmd_config(args) -> None:
     """Display current config."""
     config = load_config()
@@ -539,6 +613,16 @@ def main() -> None:
     p_tstream = subparsers.add_parser("test-stream", help="Test continuous on-the-go stream dictation live")
     p_tstream.add_argument("--duration", type=int, default=10, help="Test stream duration in seconds (default: 10)")
     p_tstream.set_defaults(func=cmd_test_stream)
+
+    # autostart (alias: service)
+    for auto_cmd in ("autostart", "service"):
+        p_auto = subparsers.add_parser(auto_cmd, help="Manage systemd user service for background daemon autostart on boot")
+        p_auto.add_argument("--enable", action="store_true", help="Enable & start Spic daemon automatically on PC boot")
+        p_auto.add_argument("--disable", action="store_true", help="Disable Spic daemon autostart")
+        p_auto.add_argument("--status", action="store_true", help="Check live systemd service status")
+        p_auto.add_argument("--logs", action="store_true", help="View live background logs")
+        p_auto.add_argument("--lines", type=int, default=50, help="Number of log lines to show (default: 50)")
+        p_auto.set_defaults(func=cmd_autostart)
 
     # memory
     p_mem = subparsers.add_parser("memory", help="Manage cross-agent persistent memory (CoALA framework)")

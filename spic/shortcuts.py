@@ -395,6 +395,107 @@ def _get_target_ecodes_groups(binding: str) -> list[set[int]]:
     return groups
 
 
+class ActivityTerminationWatcher:
+    """Watches for user interaction (any key press or mouse move/click) to immediately stop recording & process."""
+
+    def __init__(
+        self,
+        on_activity: Callable[[], None],
+        grace_period_seconds: float = 0.25,
+        mouse_threshold_px: float = 15.0,
+    ):
+        self.on_activity = on_activity
+        self.grace_period_seconds = grace_period_seconds
+        self.mouse_threshold_px = mouse_threshold_px
+
+        self._active = False
+        self._start_time = 0.0
+        self._initial_mouse_pos: Optional[Tuple[int, int]] = None
+        self._lock = threading.Lock()
+
+        self._keyboard_listener = None
+        self._mouse_listener = None
+
+    def start(self) -> None:
+        """Start listening for user interaction."""
+        with self._lock:
+            if self._active:
+                return
+            self._active = True
+            self._start_time = time.time()
+            self._initial_mouse_pos = None
+
+            try:
+                import pynput
+                self._keyboard_listener = pynput.keyboard.Listener(on_press=self._on_key_press)
+                self._keyboard_listener.daemon = True
+                self._keyboard_listener.start()
+
+                self._mouse_listener = pynput.mouse.Listener(
+                    on_move=self._on_mouse_move,
+                    on_click=self._on_mouse_click,
+                )
+                self._mouse_listener.daemon = True
+                self._mouse_listener.start()
+            except Exception as e:
+                logger.debug(f"ActivityTerminationWatcher listener notice: {e}")
+
+    def stop(self) -> None:
+        """Stop listening for user interaction."""
+        with self._lock:
+            if not self._active:
+                return
+            self._active = False
+
+            if self._keyboard_listener is not None:
+                try:
+                    self._keyboard_listener.stop()
+                except Exception:
+                    pass
+                self._keyboard_listener = None
+
+            if self._mouse_listener is not None:
+                try:
+                    self._mouse_listener.stop()
+                except Exception:
+                    pass
+                self._mouse_listener = None
+
+    def _trigger(self, reason: str) -> None:
+        should_call = False
+        with self._lock:
+            if self._active and (time.time() - self._start_time >= self.grace_period_seconds):
+                self._active = False
+                should_call = True
+
+        if should_call:
+            logger.info(f"⚡ User activity detected ({reason}). Finalizing dictation instantly...")
+            if self.on_activity:
+                try:
+                    threading.Thread(target=self.on_activity, daemon=True).start()
+                except Exception as e:
+                    logger.error(f"Error in on_activity callback: {e}")
+
+    def _on_key_press(self, key) -> None:
+        self._trigger("key_press")
+
+    def _on_mouse_click(self, x, y, button, pressed) -> None:
+        if pressed:
+            self._trigger("mouse_click")
+
+    def _on_mouse_move(self, x, y) -> None:
+        if self._initial_mouse_pos is None:
+            self._initial_mouse_pos = (x, y)
+            return
+
+        ix, iy = self._initial_mouse_pos
+        dx = x - ix
+        dy = y - iy
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist >= self.mouse_threshold_px:
+            self._trigger(f"mouse_move_{int(dist)}px")
+
+
 class GlobalKeyHoldListener:
     """Dual-layer global key-hold listener utilizing native Linux evdev with pynput fallback."""
 
@@ -577,6 +678,8 @@ class GlobalKeyHoldListener:
             if keyboards:
                 self._evdev_active = True
                 logger.info(f"Evdev listening on {len(keyboards)} hardware keyboard device(s)")
+
+            grabbed_devices = set()
 
             while self._running:
                 try:

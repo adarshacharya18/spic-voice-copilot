@@ -10,8 +10,8 @@
 flowchart TD
     subgraph Input_Layer ["🎤 Audio & Trigger Layer"]
         Hotkey["GNOME Global Hotkeys<br>(Ctrl+Alt+Space / Ctrl+Super+Space)"] -->|IPC Socket Trigger| Daemon["Spic Daemon<br>(Unix Domain Socket 0600)"]
-        HoldKey["Hardware Hold Listener<br>(RightControl 500ms Intent Timer)"] -->|Direct Evdev Event| Daemon
-        Mic["Microphone"] -->|PipeWire 16kHz s16 PCM| StreamRec["Stream Audio Recorder<br>(pw-record + VAD Slicer)"]
+        Sensor["ActivityTerminationWatcher<br>(Keypress & Mouse Vector Sensor)"] -->|Instant Finish Signal| Daemon
+        Mic["Microphone"] -->|PipeWire 16kHz s16 PCM| AudioRec["PipeWire Audio Streamer<br>(pw-record + Dynamic VAD)"]
     end
 
     subgraph Visual_Layer ["✨ Ambient Motion Layer"]
@@ -19,8 +19,7 @@ flowchart TD
     end
 
     subgraph Intelligence_Layer ["🧠 Cognitive Memory & Speech Pipeline"]
-        StreamRec -->|Speech Slices on Pause (450ms)| Worker["Stream Transcription Worker<br>(Async FIFO Queue + Rolling Prompt)"]
-        Worker --> STT["Local STT Engine<br>(faster-whisper CPU int8)"]
+        AudioRec --> STT["Local STT Engine<br>(faster-whisper CPU int8)"]
         
         STT -->|Raw Speech| Router["Interpreter & Router"]
         Router -->|Fast Dictation Mode| RuleCleaner["Deterministic Rule Cleaner<br>(Deletions, Self-Corrections, Punctuation)"]
@@ -30,7 +29,7 @@ flowchart TD
     end
 
     subgraph Output_Layer ["⌨️ Universal Wayland Injection Layer"]
-        RuleCleaner -->|Sanitized Stream Chunks| Injector["Universal Input Injector"]
+        RuleCleaner -->|Sanitized Text| Injector["Universal Input Injector"]
         LLM -->|Polished Output| Injector
         Injector -->|Hardware Key Events| UInput["Linux Kernel /dev/uinput<br>(Spic Virtual Keyboard)"]
         UInput -->|Direct Hardware Keystrokes| ActiveApp["Active Focused Window<br>(VS Code, Terminal, Browser, Slack)"]
@@ -41,15 +40,15 @@ flowchart TD
 
 ## 2. Core Subsystems
 
-### A. Continuous On-the-GO Stream Dictation Pipeline (`spic.audio`, `spic.stt`)
-- **Real-Time VAD Chunk Slicing:** Continuous audio captured via PipeWire is analyzed in 50ms frames using RMS energy tracking. When a natural pause ($450\text{ms}$) is detected or max chunk duration ($8.0\text{s}$) is reached, the speech slice is extracted and dispatched to the transcription worker without interrupting audio capture.
-- **Async FIFO Transcription Worker (`StreamTranscriptionWorker`):** Transcribes audio slices asynchronously in background threads. Maintains a rolling prompt context of the last 200 transcribed characters (`initial_prompt`) to ensure acoustic continuity across chunks.
-- **Smart Inter-Chunk Spacing:** Evaluates boundary tokens to manage spacing and punctuation dynamically (e.g. prepending whitespace before words while adhering directly to commas, periods, and colons).
+### A. Tap-to-Start, Action-to-Finish Engine (`spic.shortcuts`, `spic.daemon`)
+- **Zero Key Holding:** Users tap `Ctrl + Alt + Space` or `Ctrl + Super + Space` once to activate. Hands remain completely free during speech.
+- **Gesture & Hardware Termination:** The `ActivityTerminationWatcher` activates with a **250ms release grace period**:
+  - The instant the user **presses any key** (e.g. `Space`, `Enter`, or resumes typing), **moves the mouse** ($>15\text{px}$ vector), or **clicks**, recording instantly terminates and triggers processing.
+  - **Silence VAD Fallback:** If no manual action is taken, a 1.0s silence detector automatically finalizes the input.
 
-### B. Hardware Key-Hold Engine & 500ms Intent Timer (`spic.shortcuts`)
-- **Kernel Evdev Hook:** Monitors `/dev/input/event*` devices using Linux `evdev` to capture raw hardware keypress events with zero latency.
-- **500ms Intent Activation Timer:** Prevents accidental tap flicker. If the key is tapped for $<500\text{ms}$, the timer cancels silently with zero resource usage. When held past $500\text{ms}$, the full stream dictation pipeline activates.
-- **Auto-Hotplug Recovery:** Safely prunes disconnected or sleeping USB/Bluetooth keyboards (`OSError: [Errno 19]`) and auto-discovers newly plugged keyboards every 4 seconds without crashing.
+### B. Non-Blocking Audio Capture (`spic.audio`)
+- **Native PipeWire Streaming:** Uses `pw-record --rate 16000 --channels 1 --format s16 --raw -` to pipe raw mono PCM audio directly into a background consumer thread.
+- **Dynamic Voice Activity Detection (VAD):** Continuous RMS energy tracking with exponential headroom calibration.
 
 ### C. Multi-Agent Cognitive Memory System (`spic.memory`)
 Engineered according to the **CoALA (Cognitive Architectures for Language Agents)** framework:
@@ -85,10 +84,10 @@ Engineered according to the **CoALA (Cognitive Architectures for Language Agents
 
 ## 3. End-to-End Latency Profile
 
-| Stage | Fast Dictation (`Ctrl+Alt+Space`) | On-the-GO Stream (`Hold RightControl`) | Smart Copilot (`Ctrl+Super+Space`) |
-|---|---|---|---|
-| **Audio Capture & Slicing** | Streamed real-time | Sliced every 450ms pause | Streamed real-time |
-| **STT (Whisper Base CPU int8)** | ~250ms | ~180ms per chunk | ~250ms |
-| **Interpretation** | <1ms (Rule Cleaner) | <1ms (Smart Spacing) | ~2.5s (Ollama) / ~250ms (Groq) |
-| **Hardware Injection (uinput)** | ~50ms | ~20ms per chunk | ~50ms |
-| **Total Roundtrip Latency** | **~300ms** | **Live Streaming on Pauses** | **~2.8s (Local) / ~550ms (Cloud)** |
+| Stage | Fast Dictation (`Ctrl+Alt+Space`) | Smart Copilot (`Ctrl+Super+Space`) |
+|---|---|---|
+| **Audio Capture & VAD** | Streamed in real-time | Streamed in real-time |
+| **STT (Whisper Base CPU int8)** | ~250ms | ~250ms |
+| **Interpretation** | <1ms (Rule Cleaner) | ~2.5s (Ollama) / ~250ms (Groq) |
+| **Hardware Injection (uinput)** | ~50ms | ~50ms |
+| **Total Roundtrip Latency** | **~300ms (Instantaneous)** | **~2.8s (Local) / ~550ms (Cloud)** |
