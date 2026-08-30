@@ -23,9 +23,9 @@ class AudioConfig(BaseModel):
 
 
 class STTConfig(BaseModel):
-    engine: Literal["faster-whisper", "whisper-cpp", "cloud-api"] = Field(
+    engine: Literal["faster-whisper", "gemini-live", "whisper-cpp", "cloud-api"] = Field(
         default="faster-whisper",
-        description="Speech to text engine to use"
+        description="Speech to text engine to use ('faster-whisper' for local CPU int8, 'gemini-live' for Google Gemini Live Transcribe API)"
     )
     model_size: str = Field(
         default="base.en",
@@ -144,11 +144,22 @@ def load_config() -> SpicConfig:
 
     if CONFIG_FILE.exists():
         try:
+            os.chmod(CONFIG_FILE, 0o600)
+        except Exception:
+            pass
+        try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return SpicConfig(**data)
         except Exception as e:
             print(f"[Spic Config] Warning: Failed to parse {CONFIG_FILE} ({e}). Using defaults.")
+
+    env_file = CONFIG_DIR / ".env"
+    if env_file.exists():
+        try:
+            os.chmod(env_file, 0o600)
+        except Exception:
+            pass
 
     config = SpicConfig()
     save_config(config)

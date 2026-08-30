@@ -136,24 +136,69 @@ def cmd_test_mic(args) -> None:
 
 
 def cmd_test_stt(args) -> None:
-    """Test STT recording and transcription."""
+    """Record speech and run a side-by-side comparison benchmark of Local Whisper vs Google Gemini Live STT."""
     from spic.audio.recorder import AudioRecorder
     from spic.stt.engine import STTEngine
+    from spic.stt.gemini_live import GeminiLiveSTT
+    from spic.config import STTConfig
 
     config = load_config()
-    stt = STTEngine(config.stt)
     recorder = AudioRecorder()
+    duration = getattr(args, "duration", 4) or 4
 
-    print("[Spic] Speak for 4 seconds...")
+    print("\n" + "=" * 65)
+    print(" 🎙️  Spic Speech-to-Text Benchmark: Whisper vs. Gemini Live")
+    print("=" * 65)
+    print(f"Speak into your microphone for {duration} seconds...")
     recorder.start_recording()
-    for i in range(4, 0, -1):
-        print(f"Recording... {i}s remaining")
+    for i in range(duration, 0, -1):
+        print(f" 🔴 Recording... {i}s remaining")
         time.sleep(1)
 
     audio = recorder.stop_recording()
-    print("Transcribing with local Whisper model...")
-    text = stt.transcribe(audio)
-    print(f"\n✅ Result: \"{text}\"")
+    duration_s = len(audio) / 16000
+    print(f"\nCaptured {len(audio)} audio samples ({duration_s:.2f}s).\n")
+
+    # 1. Test Local Whisper
+    whisper_cfg = STTConfig(engine="faster-whisper", model_size=config.stt.model_size)
+    whisper_engine = STTEngine(whisper_cfg)
+    print("⏳ [1/2] Transcribing with Local Whisper (faster-whisper CPU int8)...")
+    t0 = time.time()
+    try:
+        whisper_text = whisper_engine.transcribe(audio)
+        whisper_time = time.time() - t0
+        print(f"  • Latency: {whisper_time:.3f}s | Mode: 100% Offline")
+        print(f"  • Output:  \"{whisper_text}\"\n")
+    except Exception as e:
+        whisper_text = f"Error: {e}"
+        whisper_time = 0.0
+        print(f"  • Failed: {e}\n")
+
+    # 2. Test Google Gemini Live STT
+    gemini_live = GeminiLiveSTT()
+    print("⏳ [2/2] Transcribing with Google Gemini Live (gemini-3.5-transcribe-live)...")
+    t0 = time.time()
+    try:
+        gemini_text = gemini_live.transcribe(audio)
+        gemini_time = time.time() - t0
+        if gemini_text:
+            print(f"  • Latency: {gemini_time:.3f}s | Mode: Google Cloud Live WebSocket")
+            print(f"  • Output:  \"{gemini_text}\"\n")
+        else:
+            gemini_text = "(No transcript returned / missing API key)"
+            print("  • Gemini Live STT returned no text (check API key or network).\n")
+    except Exception as e:
+        gemini_text = f"Error: {e}"
+        gemini_time = 0.0
+        print(f"  • Failed: {e}\n")
+
+    # Side-by-side summary table
+    print("=" * 65)
+    print(" 📊 Side-by-Side Comparison Summary")
+    print("=" * 65)
+    print(f" ⚡ Local Whisper:  \"{whisper_text}\" ({whisper_time:.2f}s)")
+    print(f" ☁️  Gemini Live:   \"{gemini_text}\" ({gemini_time:.2f}s)")
+    print("=" * 65 + "\n")
 
 
 def cmd_test_llm(args) -> None:
@@ -642,7 +687,8 @@ def main() -> None:
     p_mic.set_defaults(func=cmd_test_mic)
 
     # test-stt
-    p_stt = subparsers.add_parser("test-stt", help="Record and test Speech-to-Text")
+    p_stt = subparsers.add_parser("test-stt", help="Record speech and run a side-by-side comparison of Whisper vs Gemini Live STT")
+    p_stt.add_argument("--duration", type=int, default=4, help="Recording duration in seconds (default: 4)")
     p_stt.set_defaults(func=cmd_test_stt)
 
     # test-llm

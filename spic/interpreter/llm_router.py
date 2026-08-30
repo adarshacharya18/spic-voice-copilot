@@ -44,7 +44,7 @@ class LLMRouter:
             pass
 
     def process(self, raw_text: str, force_smart_mode: Optional[bool] = None) -> str:
-        """Process transcription. If smart mode is disabled, uses rule cleaner."""
+        """Process transcription with automatic 3-tier fallback: Cloud Provider -> Local Ollama -> Rule Cleaner."""
         if not raw_text or not raw_text.strip():
             return ""
 
@@ -56,38 +56,69 @@ class LLMRouter:
         if not use_smart or self.config.provider == "none":
             return self.rule_cleaner.clean(bounded_text)
 
-        # Route through selected LLM provider
-        try:
-            if self.config.provider == "ollama":
-                return self._call_ollama(bounded_text)
-            elif self.config.provider == "groq":
-                return self._call_groq(bounded_text)
-            elif self.config.provider == "openai":
-                return self._call_openai(bounded_text)
-            elif self.config.provider == "anthropic":
-                return self._call_anthropic(bounded_text)
-            elif self.config.provider == "gemini":
-                return self._call_gemini(bounded_text)
-            elif self.config.provider == "openrouter":
-                return self._call_openrouter(bounded_text)
-            else:
-                logger.warning(f"Unknown provider '{self.config.provider}', falling back to rule cleaner.")
-                return self.rule_cleaner.clean(bounded_text)
-        except Exception as e:
-            # Mask any potential sensitive details in logs
-            err_msg = str(e).split("?key=")[0]
-            logger.error(f"LLM processing failed ({err_msg}). Falling back to rule-based cleaner.")
-            return self.rule_cleaner.clean(bounded_text)
+        # Tier 1: Selected Cloud LLM Provider (Gemini, Groq, OpenAI, Anthropic, OpenRouter)
+        if self.config.provider != "ollama":
+            try:
+                if self.config.provider == "gemini":
+                    return self._call_gemini(bounded_text)
+                elif self.config.provider == "groq":
+                    return self._call_groq(bounded_text)
+                elif self.config.provider == "openai":
+                    return self._call_openai(bounded_text)
+                elif self.config.provider == "anthropic":
+                    return self._call_anthropic(bounded_text)
+                elif self.config.provider == "openrouter":
+                    return self._call_openrouter(bounded_text)
+            except Exception as e:
+                err_msg = str(e).split("?key=")[0]
+                logger.warning(
+                    f"Primary provider '{self.config.provider}' unavailable ({err_msg}). Falling back to local Ollama..."
+                )
+                self._notify_missing_provider(
+                    f"{self.config.provider.title()} Fallback",
+                    f"{self.config.provider.title()} unavailable. Attempting backup with local Ollama.",
+                )
 
-    def _get_api_key(self, env_var_names: list[str]) -> Optional[str]:
-        """Get API key from config or environment variables."""
-        if self.config.api_key:
-            return self.config.api_key
+        # Tier 2: Local Offline Ollama Backup
+        try:
+            return self._call_ollama(bounded_text)
+        except Exception as e:
+            err_msg = str(e).split("?key=")[0]
+            logger.warning(f"Ollama processing failed ({err_msg}). Falling back to rule-based cleaner.")
+
+        # Tier 3: Deterministic Rule Cleaner (Guaranteed 100% offline, zero speech lost)
+        return self.rule_cleaner.clean(bounded_text)
+
+    def _get_env_val(self, env_var_names: list[str]) -> Optional[str]:
+        """Get value from environment variables or ~/.config/spic/.env."""
         for var in env_var_names:
             val = os.environ.get(var)
             if val:
                 return val
+
+        from pathlib import Path
+        env_file = Path.home() / ".config" / "spic" / ".env"
+        if env_file.exists():
+            try:
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k in env_var_names and v:
+                        return v
+            except Exception:
+                pass
+
         return None
+
+    def _get_api_key(self, env_var_names: list[str]) -> Optional[str]:
+        """Get API key from config, environment variables, or ~/.config/spic/.env."""
+        if self.config.api_key:
+            return self.config.api_key
+        return self._get_env_val(env_var_names)
 
     FEW_SHOT_EXAMPLES = [
         {"role": "user", "content": "in the left drawer from the drawer"},
@@ -140,8 +171,15 @@ class LLMRouter:
     def _call_ollama(self, text: str) -> str:
         """Call local Ollama instance via HTTP API with few-shot formatting."""
         url = f"{self.config.base_url.rstrip('/')}/api/chat"
+
+        # Select local model (default to llama3.2:3b if primary model is a cloud-only model)
+        cloud_prefixes = ("gemini", "gpt", "claude", "llama-3.3-70b", "llama-3.1-8b-instant")
+        ollama_model = self.config.model
+        if any(self.config.model.lower().startswith(p) for p in cloud_prefixes):
+            ollama_model = "llama3.2:3b"
+
         payload = {
-            "model": self.config.model,
+            "model": ollama_model,
             "messages": self._build_messages(text),
             "stream": False,
             "options": {
@@ -262,7 +300,10 @@ class LLMRouter:
             role = "user" if m["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": m["content"]}]})
 
-        model_name = self.config.model if self.config.model != "qwen3:8b" else "gemini-2.0-flash"
+        model_name = (
+            self._get_env_val(["GEMINI_MODEL", "SPIC_LLM_MODEL"])
+            or (self.config.model if self.config.model.startswith("gemini") else "gemini-2.0-flash")
+        )
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         headers = {
             "Content-Type": "application/json",

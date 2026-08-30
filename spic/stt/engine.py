@@ -10,16 +10,18 @@ import numpy as np
 import soundfile as sf
 
 from spic.config import STTConfig
+from spic.stt.gemini_live import GeminiLiveSTT
 
 logger = logging.getLogger("spic.stt.engine")
 
 
 class STTEngine:
-    """Local Speech-to-Text engine optimized for CPU / int8 quantization."""
+    """Hybrid Speech-to-Text engine supporting local Whisper and Google Gemini Live Transcribe."""
 
     def __init__(self, config: STTConfig):
         self.config = config
         self._model = None
+        self._gemini_live = GeminiLiveSTT() if config.engine == "gemini-live" else None
 
     def _get_model(self):
         """Lazy load the Whisper model into RAM."""
@@ -55,17 +57,29 @@ class STTEngine:
         if audio.size == 0:
             return ""
 
-        # Audio duration check
         duration_s = len(audio) / sample_rate
         if duration_s < 0.2:  # Less than 200ms is likely a click or cough
             return ""
 
-        logger.debug(f"Transcribing {duration_s:.2f}s of audio...")
+        # 1. If configured for Google Gemini Live Transcribe
+        if self.config.engine == "gemini-live":
+            if self._gemini_live is None:
+                self._gemini_live = GeminiLiveSTT()
+
+            start_t = time.time()
+            res = self._gemini_live.transcribe(audio, sample_rate=sample_rate, initial_prompt=initial_prompt)
+            if res is not None:
+                elapsed = time.time() - start_t
+                logger.info(f"[Gemini Live STT] Transcription complete in {elapsed:.2f}s (Audio: {duration_s:.1f}s): '{res}'")
+                return res
+            logger.warning("[Gemini Live STT] Live transcription unavailable. Falling back to local Whisper...")
+
+        # 2. Local faster-whisper inference
+        logger.debug(f"Transcribing {duration_s:.2f}s of audio with local Whisper...")
         start_t = time.time()
 
         model = self._get_model()
 
-        # faster-whisper accepts numpy float32 directly
         segments, info = model.transcribe(
             audio,
             beam_size=1,  # Greedy search for fastest CPU response
